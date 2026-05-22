@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "866414790092",
+    "project_id": "remont-76b60",
+    "storage_bucket": "remont-76b60.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:866414790092:android:883477f0f1753bf6918969",
+        "android_client_info": {
+          "package_name": "com.remont.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCAnSU02P3iOxmqzhrJv_oN6gIWb589OQA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

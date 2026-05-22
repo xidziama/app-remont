@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: remont_backend
+    environment:
+      PORT: 8080
+      FIREBASE_PROJECT_ID: remont-local
+      FIRESTORE_EMULATOR_HOST: firebase-emulators:8080
+      FIREBASE_AUTH_EMULATOR_HOST: firebase-emulators:9099
+      FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulators:9199
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/package.json:/app/package.json
+    depends_on:
+      - firebase-emulators
+    command: npm start
+
+  firebase-emulators:
+    build:
+      context: ./docker/firebase
+      dockerfile: Dockerfile
+    container_name: remont_firebase_emulators
+    working_dir: /workspace
+    command: firebase emulators:start --project remont-local --only auth,firestore,storage
+    ports:
+      - "4000:4000"
+      - "8080:8080"
+      - "9099:9099"
+      - "9199:9199"
+    volumes:
+      - ./:/workspace
+      - firebase_tools_cache:/root/.cache
+
+volumes:
+  firebase_tools_cache:

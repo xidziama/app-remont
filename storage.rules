@@ -1,0 +1,25 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Пользователь должен быть авторизован в Firebase Auth.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Файл объекта можно читать и писать только участникам этого объекта.
+    // Список участников хранится в Firestore-документе projects/{projectId}.
+    function isProjectMember(projectId) {
+      return signedIn()
+        && (
+          request.auth.uid in firestore.get(/databases/(default)/documents/projects/$(projectId)).data.participantIds
+          || request.auth.token.phone_number in firestore.get(/databases/(default)/documents/projects/$(projectId)).data.participantPhones
+        );
+    }
+
+    // Все изображения проекта лежат внутри projects/{projectId}/...
+    match /projects/{projectId}/{allPaths=**} {
+      allow read, write: if isProjectMember(projectId);
+    }
+  }
+}

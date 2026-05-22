@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // DEV-ONLY RULES FOR FIREBASE EMULATOR.
+    //
+    // Важно: даже локальный Firestore Emulator выполняет security rules.
+    // Если rules запрещают чтение, Flutter получает обычную ошибку
+    // cloud_firestore/permission-denied, как и в production Firebase.
+    //
+    // Почему прежние rules падали:
+    // - экран списка читал коллекцию `objects`;
+    // - rule вызывал isProjectMember(projectId);
+    // - внутри rule оператор `in` проверял participantIds/participantPhones;
+    // - если поле отсутствовало или было null, Firestore Rules получал null
+    //   вместо list и возвращал ошибку вида "Null value error. for 'list'";
+    // - снаружи это выглядело как permission-denied.
+    //
+    // На время локальной разработки открываем чтение и запись полностью,
+    // чтобы быстро проверять Flutter UI, создание объектов, чат, расходы и фото.
+    //
+    // Перед production эту секцию нужно заменить строгими правилами доступа.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
