@@ -33,6 +33,11 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Node.js dependencies (rules-tests/ и любые другие npm-подпроекты).
+# package.json/package-lock.json/исходники тестов остаются отслеживаемыми —
+# разработчик сам прогоняет npm install после клонирования.
+node_modules/
+
 # Symbolication related
 app.*.symbols
 
@@ -43,3 +48,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Локальные секреты (S3 access key/secret и т.п.) — не должны попадать в git.
+# Сюда обычно кладут --dart-define значения для удобного запуска.
+*.env
+.env
+.env.*
+run_local.sh
+run_local.ps1
+run_local.bat
+*.secrets
+*secrets*.sh
+*secrets*.ps1
+
+# Android signing keystore (подпись release-сборки) — потеря/утечка = катастрофа,
+# восстановить нельзя, обновления в Google Play станут невозможны.
+*.keystore
+*.jks
+key.properties
+keystore.properties

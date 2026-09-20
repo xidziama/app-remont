@@ -1,12 +1,33 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    // Google Services plugin reads android/app/google-services.json and generates
+    // Android resources with Firebase project id, app id and API key. Without it
+    // Firebase Auth may start with stale placeholder values from Dart options.
+    id("com.google.gms.google-services")
 }
 
+// android/key.properties хранит пароли релизного keystore и не попадает в git
+// (см. android/.gitignore). На машине без этого файла debug-сборка должна
+// продолжать работать как обычно.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasReleaseSigning = keystorePropertiesFile.exists()
+if (hasReleaseSigning) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+
+// Gradle конфигурирует DSL-блок buildTypes.release при ЛЮБОЙ сборке (в том числе
+// debug), поэтому падать с ошибкой из-за отсутствия key.properties можно только
+// если реально запрошена release-задача — иначе сломаем обычный `flutter run`.
+val isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.contains("Release") }
+
 android {
-    namespace = "com.example.app_remont"
+    namespace = "com.remont.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -30,11 +51,33 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigning) {
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            } else if (isReleaseTaskRequested) {
+                throw GradleException(
+                    "Release signing не настроен: создайте android/key.properties " +
+                        "(storePassword/keyPassword/keyAlias/storeFile) перед сборкой release. " +
+                        "Без него release-сборка не будет подписана боевым ключом."
+                )
+            }
+            // Иначе (debug-сборка без key.properties) конфиг просто не используется.
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                // Сюда попадаем только когда release-задача НЕ запрошена
+                // (см. throw выше) — конфигурация debug-сборки не должна падать.
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

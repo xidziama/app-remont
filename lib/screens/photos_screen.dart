@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/company.dart';
+import '../models/photo.dart';
 import '../models/project.dart';
-import '../models/project_photo.dart';
 import '../models/repair_stage.dart';
 import '../repositories/project_repository.dart';
-import '../services/storage_service.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/photo_filter_bar.dart';
 import '../widgets/photo_upload_sheet.dart';
@@ -23,9 +23,14 @@ import '../widgets/stage_manager_sheet.dart';
 /// - группировка фото по этапам;
 /// - удаление фото.
 class PhotosScreen extends StatefulWidget {
-  const PhotosScreen({super.key, required this.project});
+  const PhotosScreen({
+    super.key,
+    required this.project,
+    required this.company,
+  });
 
   final Project project;
+  final CompanyMember company;
 
   @override
   State<PhotosScreen> createState() => _PhotosScreenState();
@@ -34,34 +39,16 @@ class PhotosScreen extends StatefulWidget {
 class _PhotosScreenState extends State<PhotosScreen> {
   String _searchQuery = '';
   String? _selectedStageId;
-  bool _defaultStagesRequested = false;
+
+  // UX decision: этапы больше не создаются автоматически. Поле оставлено true,
+  // чтобы старый bootstrap-код ниже не запускался и не ломал ручной сценарий.
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    // didChangeDependencies безопасно имеет доступ к Provider.
-    // Запрашиваем создание дефолтных этапов только один раз за жизнь экрана.
-    if (!_defaultStagesRequested) {
-      _defaultStagesRequested = true;
-      _ensureDefaultStages();
-    }
-  }
-
-  Future<void> _ensureDefaultStages() async {
-    try {
-      await context
-          .read<ProjectRepository>()
-          .ensureDefaultStages(widget.project.id);
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не удалось создать этапы по умолчанию: $error')),
-      );
-    }
+    // Этапы больше не создаются автоматически при открытии экрана фото.
+    // Прораб сам добавляет нужные этапы под конкретный объект.
   }
 
   Future<void> _openUploadSheet(List<RepairStage> stages) async {
@@ -86,7 +73,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     );
   }
 
-  Future<void> _deletePhoto(ProjectPhoto photo) async {
+  Future<void> _deletePhoto(Photo photo) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -115,15 +102,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     final repository = context.read<ProjectRepository>();
 
     try {
-      // Сначала пытаемся удалить файл из Storage.
-      // Если файл уже удален или URL старый, metadata все равно удалим ниже.
-      try {
-        await StorageService.instance.deleteByUrl(photo.imageUrl);
-      } catch (_) {
-        // Storage cleanup не должен блокировать удаление карточки из UI.
-      }
-
-      await repository.deletePhoto(widget.project.id, photo.id);
+      await repository.deleteStagePhoto(photo);
     } catch (error) {
       if (!mounted) {
         return;
@@ -135,8 +114,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
     }
   }
 
-  List<ProjectPhoto> _filterPhotos(
-    List<ProjectPhoto> photos,
+  List<Photo> _filterPhotos(
+    List<Photo> photos,
     Map<String, RepairStage> stageById,
   ) {
     final query = _searchQuery.trim().toLowerCase();
@@ -155,7 +134,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
 
       final searchableText = [
         stageName,
-        photo.description,
+        photo.comment ?? '',
         photo.uploadedBy,
       ].join(' ').toLowerCase();
 
@@ -164,21 +143,20 @@ class _PhotosScreenState extends State<PhotosScreen> {
   }
 
   List<_PhotoFeedItem> _buildFeedItems({
-    required List<ProjectPhoto> photos,
+    required List<Photo> photos,
     required List<RepairStage> stages,
   }) {
-    final stageById = {for (final stage in stages) stage.id: stage};
-    final grouped = <String, List<ProjectPhoto>>{};
+    final grouped = <String, List<Photo>>{};
 
     for (final photo in photos) {
       final key = photo.stageId.isEmpty ? _missingStageId : photo.stageId;
-      grouped.putIfAbsent(key, () => <ProjectPhoto>[]).add(photo);
+      grouped.putIfAbsent(key, () => <Photo>[]).add(photo);
     }
 
     final items = <_PhotoFeedItem>[];
 
     for (final stage in stages) {
-      final stagePhotos = grouped[stage.id] ?? <ProjectPhoto>[];
+      final stagePhotos = grouped[stage.id] ?? <Photo>[];
       if (stagePhotos.isEmpty) {
         continue;
       }
@@ -189,9 +167,10 @@ class _PhotosScreenState extends State<PhotosScreen> {
       }
     }
 
-    final missingPhotos = grouped[_missingStageId] ?? <ProjectPhoto>[];
+    final missingPhotos = grouped[_missingStageId] ?? <Photo>[];
     if (missingPhotos.isNotEmpty) {
-      items.add(_PhotoFeedItem.header(stage: null, count: missingPhotos.length));
+      items
+          .add(_PhotoFeedItem.header(stage: null, count: missingPhotos.length));
       for (final photo in missingPhotos) {
         items.add(_PhotoFeedItem.photo(photo: photo, stage: null));
       }
@@ -213,11 +192,12 @@ class _PhotosScreenState extends State<PhotosScreen> {
           appBar: AppBar(
             title: const Text('Фото'),
             actions: [
-              IconButton(
-                tooltip: 'Этапы работ',
-                onPressed: () => _openStageManager(stages),
-                icon: const Icon(Icons.flag),
-              ),
+              if (widget.company.role.isOwner || widget.company.role.isManager)
+                IconButton(
+                  tooltip: 'Этапы работ',
+                  onPressed: () => _openStageManager(stages),
+                  icon: const Icon(Icons.flag),
+                ),
             ],
           ),
           body: _buildBody(
@@ -226,11 +206,14 @@ class _PhotosScreenState extends State<PhotosScreen> {
             stageSnapshot: stageSnapshot,
             repository: repository,
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _openUploadSheet(stages),
-            icon: const Icon(Icons.add_a_photo),
-            label: const Text('Фото'),
-          ),
+          floatingActionButton:
+              widget.company.role.isOwner || widget.company.role.isManager
+                  ? FloatingActionButton.extended(
+                      onPressed: () => _openUploadSheet(stages),
+                      icon: const Icon(Icons.add_a_photo),
+                      label: const Text('Фото'),
+                    )
+                  : null,
         );
       },
     );
@@ -268,8 +251,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
           },
         ),
         Expanded(
-          child: StreamBuilder<List<ProjectPhoto>>(
-            stream: repository.watchPhotos(widget.project.id),
+          child: StreamBuilder<List<Photo>>(
+            stream: repository.watchProjectPhotosAcrossStages(widget.project.id),
             builder: (context, photoSnapshot) {
               if (photoSnapshot.hasError) {
                 return EmptyState(
@@ -283,7 +266,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final photos = photoSnapshot.data ?? <ProjectPhoto>[];
+              final photos = photoSnapshot.data ?? <Photo>[];
               final stageById = {for (final stage in stages) stage.id: stage};
               final filteredPhotos = _filterPhotos(photos, stageById);
 
@@ -309,6 +292,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
               );
 
               return ListView.builder(
+                key: PageStorageKey<String>('photos_${widget.project.id}'),
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
                 itemCount: items.length,
                 itemBuilder: (context, index) {
@@ -358,7 +342,7 @@ class _PhotoFeedItem {
   final bool header;
   final RepairStage? stage;
   final int count;
-  final ProjectPhoto? photo;
+  final Photo? photo;
 }
 
 class _StageHeader extends StatelessWidget {

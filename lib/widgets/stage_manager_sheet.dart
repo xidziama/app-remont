@@ -111,6 +111,7 @@ class StageManagerSheet extends StatelessWidget {
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: maxListHeight),
               child: ListView.separated(
+                key: PageStorageKey<String>('stage_manager_$projectId'),
                 shrinkWrap: true,
                 itemCount: stages.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -121,7 +122,7 @@ class StageManagerSheet extends StatelessWidget {
                   return Card(
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: color.withOpacity(0.12),
+                        backgroundColor: color.withAlpha(31),
                         child: Icon(
                           StageUiUtils.iconFromName(stage.icon),
                           color: color,

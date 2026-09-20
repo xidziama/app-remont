@@ -6,7 +6,7 @@ services:
     container_name: remont_backend
     environment:
       PORT: 8080
-      FIREBASE_PROJECT_ID: remont-local
+      FIREBASE_PROJECT_ID: remont-76b60
       FIRESTORE_EMULATOR_HOST: firebase-emulators:8080
       FIREBASE_AUTH_EMULATOR_HOST: firebase-emulators:9099
       FIREBASE_STORAGE_EMULATOR_HOST: firebase-emulators:9199
@@ -25,7 +25,7 @@ services:
       dockerfile: Dockerfile
     container_name: remont_firebase_emulators
     working_dir: /workspace
-    command: firebase emulators:start --project remont-local --only auth,firestore,storage
+    command: firebase emulators:start --project remont-76b60 --only auth,firestore,storage
     ports:
       - "4000:4000"
       - "8080:8080"

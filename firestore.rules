@@ -2,26 +2,705 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // DEV-ONLY RULES FOR FIREBASE EMULATOR.
+    // -----------------------------------------------------------------------
+    // Common helpers
+    // -----------------------------------------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function authEmail() {
+      return request.auth.token.email;
+    }
+
+    function listHas(values, value) {
+      return values is list && value in values;
+    }
+
+    function hasString(data, field) {
+      return data.get(field, null) is string;
+    }
+
+    function hasNonEmptyString(data, field) {
+      return hasString(data, field)
+        && data.get(field, '').size() > 0;
+    }
+
+    function hasList(data, field) {
+      return data.get(field, null) is list;
+    }
+
+    function stringEquals(data, field, value) {
+      return hasString(data, field)
+        && data.get(field, '') == value;
+    }
+
+    function safeListHas(data, field, value) {
+      return hasList(data, field)
+        && listHas(data.get(field, []), value);
+    }
+
+    function changedOnly(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(fields);
+    }
+
+    function companyPath(companyId) {
+      return /databases/$(database)/documents/companies/$(companyId);
+    }
+
+    function memberPath(companyId, userId) {
+      return /databases/$(database)/documents/companies/$(companyId)/members/$(userId);
+    }
+
+    function invitationPath(companyId, invitationId) {
+      return /databases/$(database)/documents/companies/$(companyId)/invitations/$(invitationId);
+    }
+
+    function legacyInvitationPath(invitationId) {
+      return /databases/$(database)/documents/companyInvitations/$(invitationId);
+    }
+
+    function projectPath(projectId) {
+      return /databases/$(database)/documents/projects/$(projectId);
+    }
+
+    function stagePath(projectId, stageId) {
+      return /databases/$(database)/documents/projects/$(projectId)/stages/$(stageId);
+    }
+
+    function expensePath(projectId, expenseId) {
+      return /databases/$(database)/documents/projects/$(projectId)/expenses/$(expenseId);
+    }
+
+    function isActiveCompanyMember(companyId) {
+      return signedIn()
+        && exists(memberPath(companyId, uid()))
+        && get(memberPath(companyId, uid())).data.active == true
+        && get(memberPath(companyId, uid())).data.role in [
+          'owner',
+          'manager',
+          'worker',
+          'client'
+        ];
+    }
+
+    function isOwnMembershipDocument() {
+      return signedIn()
+        && resource.data.uid == uid();
+    }
+
+    function isOwnPendingInvitation() {
+      return signedIn()
+        && resource.data.email == authEmail()
+        && resource.data.status == 'pending';
+    }
+
+    function isActiveCompanyMemberAfter(companyId) {
+      return signedIn()
+        && existsAfter(memberPath(companyId, uid()))
+        && getAfter(memberPath(companyId, uid())).data.active == true
+        && getAfter(memberPath(companyId, uid())).data.role in [
+          'owner',
+          'manager',
+          'worker',
+          'client'
+        ];
+    }
+
+    function companyRole(companyId) {
+      return get(memberPath(companyId, uid())).data.role;
+    }
+
+    function isCompanyOwner(companyId) {
+      return isActiveCompanyMember(companyId)
+        && companyRole(companyId) == 'owner';
+    }
+
+    function isCompanyManager(companyId) {
+      return isActiveCompanyMember(companyId)
+        && companyRole(companyId) == 'manager';
+    }
+
+    function isCompanyOwnerOrManager(companyId) {
+      return isCompanyOwner(companyId) || isCompanyManager(companyId);
+    }
+
+    function managerCanCreateProjects(companyId) {
+      return isCompanyManager(companyId)
+        && get(memberPath(companyId, uid())).data.canCreateProjects == true;
+    }
+
+    function canCreateProjectForCompany(companyId) {
+      return isCompanyOwner(companyId) || managerCanCreateProjects(companyId);
+    }
+
+    function canReadProjectData(project) {
+      return signedIn()
+        && (
+          stringEquals(project, 'ownerId', uid())
+          || uid() in project.get('participantIds', [])
+          || uid() in project.get('workerIds', [])
+          || uid() in project.get('clientIds', [])
+          || (
+            hasNonEmptyString(project, 'companyId')
+            && isCompanyOwner(project.get('companyId', ''))
+          )
+          || (
+            hasNonEmptyString(project, 'companyId')
+            && isCompanyManager(project.get('companyId', ''))
+            && uid() in project.get('managerIds', [])
+          )
+        );
+    }
+
+    function canReadProject(projectId) {
+      return exists(projectPath(projectId))
+        && canReadProjectData(get(projectPath(projectId)).data);
+    }
+
+    function projectCompanyId(projectId) {
+      return get(projectPath(projectId)).data.get('companyId', '');
+    }
+
+    function hasProjectCompanyId(projectId) {
+      return exists(projectPath(projectId))
+        && hasNonEmptyString(get(projectPath(projectId)).data, 'companyId');
+    }
+
+    function canManageProject(projectId) {
+      return hasProjectCompanyId(projectId)
+        && (
+          isCompanyOwner(projectCompanyId(projectId))
+          || (isCompanyManager(projectCompanyId(projectId))
+            && safeListHas(get(projectPath(projectId)).data, 'managerIds', uid()))
+        );
+    }
+
+    function isProjectWorker(projectId) {
+      return exists(projectPath(projectId))
+        && safeListHas(get(projectPath(projectId)).data, 'workerIds', uid());
+    }
+
+    function isProjectClient(projectId) {
+      return exists(projectPath(projectId))
+        && safeListHas(get(projectPath(projectId)).data, 'clientIds', uid());
+    }
+
+    function isAssignedStageWorker(projectId, stageId) {
+      return signedIn()
+        && exists(stagePath(projectId, stageId))
+        && safeListHas(get(stagePath(projectId, stageId)).data, 'assignedUserIds', uid());
+    }
+
+    // Used inside match /expenses/{expenseId}, where resource.data is the
+    // expense document itself and already carries createdBy.
+    function isOwnExpense() {
+      return signedIn() && resource.data.createdBy == uid();
+    }
+
+    // Used inside match /stages/{stageId}/photos/{photoId} for the receipt
+    // mirror of an expense. The Photo document has no createdBy uid of its
+    // own (only a display-name uploadedBy string), so authorship is resolved
+    // through the sibling expense document that shares the same id.
+    function isOwnReceiptMirror(projectId, expenseId) {
+      return signedIn()
+        && exists(expensePath(projectId, expenseId))
+        && get(expensePath(projectId, expenseId)).data.createdBy == uid();
+    }
+
+    function acceptsOwnInvitation(companyId, invitationId) {
+      return signedIn()
+        && existsAfter(invitationPath(companyId, invitationId))
+        && getAfter(invitationPath(companyId, invitationId)).data.email == authEmail()
+        && getAfter(invitationPath(companyId, invitationId)).data.status == 'accepted'
+        && getAfter(invitationPath(companyId, invitationId)).data.acceptedBy == uid();
+    }
+
+    function acceptsOwnLegacyInvitation(invitationId) {
+      return signedIn()
+        && existsAfter(legacyInvitationPath(invitationId))
+        && getAfter(legacyInvitationPath(invitationId)).data.email == authEmail()
+        && getAfter(legacyInvitationPath(invitationId)).data.status == 'accepted'
+        && getAfter(legacyInvitationPath(invitationId)).data.acceptedBy == uid();
+    }
+
+    function createsOwnMembershipFromAcceptedInvitation(companyId, memberId) {
+      return signedIn()
+        && memberId == uid()
+        && request.resource.data.uid == uid()
+        && stringEquals(request.resource.data, 'companyId', companyId)
+        && request.resource.data.role in ['manager', 'worker', 'client']
+        && (
+          (
+            request.resource.data.acceptedInvitationId is string
+            && acceptsOwnInvitation(
+              companyId,
+              request.resource.data.acceptedInvitationId
+            )
+            && getAfter(invitationPath(
+              companyId,
+              request.resource.data.acceptedInvitationId
+            )).data.role == request.resource.data.role
+          )
+          || (
+            request.resource.data.acceptedLegacyInvitationId is string
+            && acceptsOwnLegacyInvitation(
+              request.resource.data.acceptedLegacyInvitationId
+            )
+            && stringEquals(
+              getAfter(legacyInvitationPath(
+                request.resource.data.acceptedLegacyInvitationId
+              )).data,
+              'companyId',
+              companyId
+            )
+            && getAfter(legacyInvitationPath(
+              request.resource.data.acceptedLegacyInvitationId
+            )).data.role == request.resource.data.role
+          )
+        );
+    }
+
+    function createsOwnMembershipInThisBatch(companyId) {
+      return signedIn()
+        && (
+          !exists(memberPath(companyId, uid()))
+          || get(memberPath(companyId, uid())).data.active != true
+        )
+        && isActiveCompanyMemberAfter(companyId);
+    }
+
+    function projectAccessFieldsOnly() {
+      return changedOnly([
+        'managerIds',
+        'managerNames',
+        'workerIds',
+        'workerNames',
+        'clientIds',
+        'clientNames',
+        'participantIds',
+        'participantPhones'
+      ]);
+    }
+
+    function stageAssignmentFieldsOnly() {
+      return changedOnly([
+        'assignedUserIds',
+        'assignedUserNames',
+        'updatedAt'
+      ]);
+    }
+
+    function stageSummaryFieldsOnly() {
+      return changedOnly([
+        'photosCount',
+        'receiptsCount',
+        'receiptsTotal',
+        'coverPhotoUrl',
+        'updatedAt'
+      ]);
+    }
+
+    function workerStatusTransitionAllowed(projectId, stageId) {
+      return isAssignedStageWorker(projectId, stageId)
+        && changedOnly(['status', 'progress', 'completedAt', 'updatedAt'])
+        && (
+          (resource.data.status == 'not_started'
+            && request.resource.data.status == 'in_progress')
+          || (resource.data.status == 'in_progress'
+            && request.resource.data.status == 'review')
+        );
+    }
+
+    function managerStatusTransitionAllowed(projectId) {
+      return canManageProject(projectId)
+        && changedOnly(['status', 'progress', 'completedAt', 'updatedAt'])
+        && (
+          (resource.data.status == 'review'
+            && request.resource.data.status in ['completed', 'problem'])
+          || (resource.data.status == 'problem'
+            && request.resource.data.status == 'in_progress')
+        );
+    }
+
+    function clientProjectStatusUpdateAllowed(projectId) {
+      return isProjectClient(projectId)
+        && changedOnly(['status'])
+        && resource.data.status == 'client_review'
+        && request.resource.data.status == 'closed';
+    }
+
+    function canCreateTimeline(projectId, stageId) {
+      return canManageProject(projectId)
+        || (
+          hasProjectCompanyId(projectId)
+          && createsOwnMembershipInThisBatch(projectCompanyId(projectId))
+        )
+        || (stageId is string
+          && stageId != ''
+          && isAssignedStageWorker(projectId, stageId))
+        || (stageId == '' && isProjectWorker(projectId))
+        || (stageId == '' && isProjectClient(projectId));
+    }
+
+    function validProjectCreate() {
+      return signedIn()
+        && stringEquals(request.resource.data, 'ownerId', uid())
+        && hasNonEmptyString(request.resource.data, 'companyId')
+        && canCreateProjectForCompany(request.resource.data.get('companyId', ''))
+        && safeListHas(request.resource.data, 'participantIds', uid());
+    }
+
+    function validCompanyCreate(companyId) {
+      return signedIn()
+        && stringEquals(request.resource.data, 'ownerId', uid())
+        && request.resource.data.status == 'active'
+        && request.resource.data.name is string
+        && request.resource.data.code is string
+        && request.resource.data.companyCode is string;
+    }
+
+    function validOwnerMemberCreate(companyId, memberId) {
+      return signedIn()
+        && memberId == uid()
+        && request.resource.data.uid == uid()
+        && stringEquals(request.resource.data, 'companyId', companyId)
+        && request.resource.data.role == 'owner'
+        && request.resource.data.active == true
+        && existsAfter(companyPath(companyId))
+        && stringEquals(getAfter(companyPath(companyId)).data, 'ownerId', uid());
+    }
+
+    function validJoinRequestCreate(companyId, requestId) {
+      return signedIn()
+        && requestId == uid()
+        && request.resource.data.uid == uid()
+        && request.resource.data.userId == uid()
+        && stringEquals(request.resource.data, 'companyId', companyId)
+        && request.resource.data.status == 'pending';
+    }
+
+    function validNotificationCreate(userId) {
+      return signedIn()
+        && request.resource.data.userId == userId
+        && request.resource.data.isRead == false
+        && request.resource.data.type is string
+        && request.resource.data.title is string
+        && request.resource.data.message is string
+        && (
+          userId == uid()
+          || (
+            hasNonEmptyString(request.resource.data, 'projectId')
+            && canReadProject(request.resource.data.get('projectId', ''))
+          )
+          || (
+            hasNonEmptyString(request.resource.data, 'companyId')
+            && exists(companyPath(request.resource.data.get('companyId', '')))
+            && stringEquals(
+              get(companyPath(request.resource.data.get('companyId', ''))).data,
+              'ownerId',
+              userId
+            )
+          )
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Users
+    // -----------------------------------------------------------------------
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && userId == uid();
+      allow delete: if false;
+
+      match /notifications/{notificationId} {
+        allow read: if signedIn() && userId == uid();
+        allow create: if validNotificationCreate(userId);
+        allow update: if signedIn()
+          && userId == uid()
+          && changedOnly(['isRead', 'readAt']);
+        allow delete: if signedIn() && userId == uid();
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Companies, roles, invitations, join requests
+    // -----------------------------------------------------------------------
+
+    match /companies/{companyId} {
+      // Authenticated users can read company documents because joining by a
+      // short company code requires a code lookup before membership exists.
+      allow read: if signedIn();
+      allow create: if validCompanyCreate(companyId);
+      allow update: if isCompanyOwner(companyId);
+      allow delete: if false;
+
+      match /members/{memberId} {
+        allow read: if isOwnMembershipDocument()
+          || isActiveCompanyMember(companyId);
+
+        allow create: if validOwnerMemberCreate(companyId, memberId)
+          || isCompanyOwner(companyId)
+          || createsOwnMembershipFromAcceptedInvitation(companyId, memberId);
+
+        allow update: if isCompanyOwner(companyId)
+          || createsOwnMembershipFromAcceptedInvitation(companyId, memberId);
+
+        allow delete: if false;
+      }
+
+      match /invitations/{invitationId} {
+        allow read: if isCompanyOwnerOrManager(companyId)
+          || isOwnPendingInvitation();
+
+        allow create: if isCompanyOwner(companyId)
+          || (
+            isCompanyManager(companyId)
+            && request.resource.data.role in ['worker', 'client']
+          );
+
+        allow update: if isCompanyOwnerOrManager(companyId)
+          || (
+            signedIn()
+            && resource.data.email == authEmail()
+            && resource.data.status == 'pending'
+            && request.resource.data.status in ['accepted', 'declined']
+            && request.resource.data.email == resource.data.email
+            && stringEquals(request.resource.data, 'companyId', companyId)
+          );
+
+        allow delete: if false;
+      }
+
+      match /joinRequests/{requestId} {
+        allow read: if isCompanyOwner(companyId)
+          || (signedIn() && requestId == uid());
+
+        allow create: if validJoinRequestCreate(companyId, requestId);
+
+        allow update: if isCompanyOwner(companyId)
+          && request.resource.data.status in ['approved', 'declined'];
+
+        allow delete: if false;
+      }
+    }
+
+    // Legacy top-level invitations are kept readable/updatable for old data.
+    // New invitations are stored at companies/{companyId}/invitations.
+    match /companyInvitations/{invitationId} {
+      allow read: if signedIn() && resource.data.email == authEmail();
+      allow update: if signedIn()
+        && resource.data.email == authEmail()
+        && request.resource.data.status in ['accepted', 'declined'];
+      allow create, delete: if false;
+    }
+
+    // Collection group startup reads.
     //
-    // Важно: даже локальный Firestore Emulator выполняет security rules.
-    // Если rules запрещают чтение, Flutter получает обычную ошибку
-    // cloud_firestore/permission-denied, как и в production Firebase.
-    //
-    // Почему прежние rules падали:
-    // - экран списка читал коллекцию `objects`;
-    // - rule вызывал isProjectMember(projectId);
-    // - внутри rule оператор `in` проверял participantIds/participantPhones;
-    // - если поле отсутствовало или было null, Firestore Rules получал null
-    //   вместо list и возвращал ошибку вида "Null value error. for 'list'";
-    // - снаружи это выглядело как permission-denied.
-    //
-    // На время локальной разработки открываем чтение и запись полностью,
-    // чтобы быстро проверять Flutter UI, создание объектов, чат, расходы и фото.
-    //
-    // Перед production эту секцию нужно заменить строгими правилами доступа.
+    // HomeRouterScreen does not know companyId yet. It asks Firestore:
+    // collectionGroup('members').where('uid', isEqualTo: currentUid).
+    // For that query Firestore must see a rule that matches every possible
+    // `members` collection group path. The nested companies/{companyId}/members
+    // rule is still used for direct company member screens, while this rule is
+    // only the bootstrap permission for reading the caller's own membership.
+    match /{path=**}/members/{memberId} {
+      allow read: if isOwnMembershipDocument();
+    }
+
+    // The onboarding screen uses the same pattern for email invitations:
+    // collectionGroup('invitations').where('email', isEqualTo: currentEmail).
+    // This rule lets the signed-in user find only their own pending invites.
+    match /{path=**}/invitations/{invitationId} {
+      allow read: if isOwnPendingInvitation();
+    }
+
+    // The project photo gallery aggregates photos from every stage in one
+    // screen via collectionGroup('photos').where('projectId', isEqualTo: X).
+    // Same constraint as above: the nested
+    // projects/{projectId}/stages/{stageId}/photos/{photoId} rule below only
+    // covers direct-path requests, not collection-group requests. projectId
+    // is an equality-filtered field on the photo document itself (not a path
+    // wildcard), which lets Firestore resolve canReadProject(...)'s get()
+    // calls against a single pinned value for the whole query.
+    match /{path=**}/photos/{photoId} {
+      allow read: if signedIn()
+        && hasNonEmptyString(resource.data, 'projectId')
+        && canReadProject(resource.data.get('projectId', ''));
+    }
+
+    // -----------------------------------------------------------------------
+    // Projects and project subcollections
+    // -----------------------------------------------------------------------
+
+    match /projects/{projectId} {
+      allow read: if canReadProjectData(resource.data);
+
+      allow create: if validProjectCreate();
+
+      allow update: if canManageProject(projectId)
+        || clientProjectStatusUpdateAllowed(projectId)
+        || (
+          projectAccessFieldsOnly()
+          && hasNonEmptyString(resource.data, 'companyId')
+          && createsOwnMembershipInThisBatch(resource.data.get('companyId', ''))
+        );
+
+      allow delete: if canManageProject(projectId)
+        && resource.data.status in ['closed', 'completed'];
+
+      match /participants/{participantId} {
+        allow read: if canReadProject(projectId);
+        allow create: if canManageProject(projectId)
+          || (
+            signedIn()
+            && participantId == uid()
+            && existsAfter(projectPath(projectId))
+            && stringEquals(getAfter(projectPath(projectId)).data, 'ownerId', uid())
+          );
+        allow update, delete: if canManageProject(projectId);
+      }
+
+      match /messages/{messageId} {
+        allow read: if canReadProject(projectId);
+        allow create: if canReadProject(projectId)
+          && request.resource.data.senderId == uid()
+          && request.resource.data.type in ['text', 'image'];
+        allow update: if false;
+        allow delete: if canManageProject(projectId)
+          || (signedIn() && resource.data.senderId == uid());
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if canReadProject(projectId);
+
+        allow create: if canManageProject(projectId)
+          || (
+            isProjectWorker(projectId)
+            && request.resource.data.createdBy == uid()
+            && hasString(request.resource.data, 'stageId')
+            && isAssignedStageWorker(
+              projectId,
+              request.resource.data.get('stageId', '')
+            )
+          );
+
+        // Оплаченный чек — свершившийся финансовый факт и уже вне активного
+        // счетчика stage.receiptsTotal. Правка/удаление запрещены ВСЕМ ролям,
+        // включая владельца и менеджера, поэтому resource.data.isPaid == false
+        // проверяется первым, выше проверки роли. Автор-подрядчик может
+        // менять только сумму/категорию/комментарий своего чека (не может
+        // трогать isPaid/createdBy/projectId/stageId), отметку "оплачено"
+        // по-прежнему ставит только canManageProject (см. markExpensesPaid).
+        allow update: if resource.data.isPaid == false
+          && (
+            canManageProject(projectId)
+            || (
+              isOwnExpense()
+              && changedOnly(['amount', 'category', 'comment'])
+            )
+          );
+
+        allow delete: if resource.data.isPaid == false
+          && (canManageProject(projectId) || isOwnExpense());
+      }
+
+      match /photos/{photoId} {
+        allow read: if canReadProject(projectId);
+        allow create: if canManageProject(projectId) || isProjectWorker(projectId);
+        allow update: if canManageProject(projectId);
+        allow delete: if canManageProject(projectId);
+      }
+
+      match /stages/{stageId} {
+        allow read: if canReadProject(projectId);
+
+        allow create: if canManageProject(projectId)
+          && stringEquals(request.resource.data, 'projectId', projectId);
+
+        allow update: if canManageProject(projectId)
+          || workerStatusTransitionAllowed(projectId, stageId)
+          || managerStatusTransitionAllowed(projectId)
+          || (
+            stageAssignmentFieldsOnly()
+            && createsOwnMembershipInThisBatch(projectCompanyId(projectId))
+          )
+          || (
+            stageSummaryFieldsOnly()
+            && isAssignedStageWorker(projectId, stageId)
+          );
+
+        allow delete: if canManageProject(projectId);
+
+        match /photos/{photoId} {
+          allow read: if canReadProject(projectId);
+
+          allow create: if canManageProject(projectId)
+            || (
+              isAssignedStageWorker(projectId, stageId)
+              && stringEquals(request.resource.data, 'projectId', projectId)
+              && stringEquals(request.resource.data, 'stageId', stageId)
+              && request.resource.data.type in [
+                'before',
+                'progress',
+                'after',
+                'problem',
+                'receipt'
+              ]
+            );
+
+          // Зеркало оплаченного чека (type == 'receipt' && isPaid == true)
+          // заморожено для ВСЕХ, включая canManageProject — та же гарантия,
+          // что и для projects/{projectId}/expenses/{expenseId} выше, чтобы
+          // сумма и статус не могли разъехаться между двумя документами.
+          // Не-чековые фото (before/progress/after/problem) не имеют isPaid,
+          // поэтому это условие их не касается.
+          allow update: if !(
+              resource.data.type == 'receipt'
+              && resource.data.get('isPaid', false) == true
+            )
+            && (
+              canManageProject(projectId)
+              || (
+                resource.data.type == 'receipt'
+                && isOwnReceiptMirror(projectId, photoId)
+                && changedOnly(['amount', 'comment', 'receiptCategory', 'updatedAt'])
+              )
+            );
+
+          allow delete: if !(
+              resource.data.type == 'receipt'
+              && resource.data.get('isPaid', false) == true
+            )
+            && (
+              canManageProject(projectId)
+              || (
+                resource.data.type == 'receipt'
+                && isOwnReceiptMirror(projectId, photoId)
+              )
+            );
+        }
+      }
+
+      match /timeline/{eventId} {
+        allow read: if canReadProject(projectId);
+        allow create: if canCreateTimeline(
+          projectId,
+          request.resource.data.get('stageId', '')
+        );
+        allow update: if false;
+        allow delete: if canManageProject(projectId);
+      }
+    }
+
+    // Deny anything that is not intentionally modeled above.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

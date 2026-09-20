@@ -2,7 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../models/project_photo.dart';
+import '../models/photo.dart';
 import '../models/repair_stage.dart';
 import '../utils/stage_ui_utils.dart';
 
@@ -20,7 +20,7 @@ class ProjectPhotoCard extends StatelessWidget {
     required this.onDelete,
   });
 
-  final ProjectPhoto photo;
+  final Photo photo;
   final RepairStage? stage;
   final VoidCallback onDelete;
 
@@ -42,7 +42,7 @@ class ProjectPhotoCard extends StatelessWidget {
           AspectRatio(
             aspectRatio: 4 / 3,
             child: CachedNetworkImage(
-              imageUrl: photo.imageUrl,
+              imageUrl: photo.downloadUrl,
               fit: BoxFit.cover,
               memCacheWidth: 900,
               fadeInDuration: const Duration(milliseconds: 180),
@@ -68,7 +68,7 @@ class ProjectPhotoCard extends StatelessWidget {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: stageColor.withOpacity(0.10),
+                        color: stageColor.withAlpha(26),
                         borderRadius: BorderRadius.circular(99),
                       ),
                       child: Row(
@@ -96,7 +96,7 @@ class ProjectPhotoCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  DateFormat('dd.MM.yyyy').format(photo.uploadedAt),
+                  DateFormat('dd.MM.yyyy').format(photo.createdAt),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Colors.black54,
                       ),
@@ -106,9 +106,9 @@ class ProjectPhotoCard extends StatelessWidget {
                   'Автор: ${photo.uploadedBy.isEmpty ? 'Неизвестно' : photo.uploadedBy}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                if (photo.description.isNotEmpty) ...[
+                if ((photo.comment ?? '').isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  Text(photo.description),
+                  Text(photo.comment!),
                 ],
               ],
             ),

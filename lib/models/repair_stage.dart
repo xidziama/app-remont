@@ -68,9 +68,11 @@ class RepairStage {
   Map<String, dynamic> toMap() {
     return {
       'name': name,
+      'title': name,
       'color': color,
       'icon': icon,
       'sortOrder': sortOrder,
+      'orderIndex': sortOrder,
       'createdAt': createdAt.toIso8601String(),
     };
   }
@@ -85,7 +87,11 @@ class RepairStage {
       name: FirestoreFieldReader.string(
         map,
         'name',
-        fallback: 'Без названия',
+        fallback: FirestoreFieldReader.string(
+          map,
+          'title',
+          fallback: 'Без названия',
+        ),
       ),
       color: FirestoreFieldReader.intValue(
         map,
@@ -97,7 +103,11 @@ class RepairStage {
         'icon',
         fallback: 'construction',
       ),
-      sortOrder: FirestoreFieldReader.intValue(map, 'sortOrder'),
+      sortOrder: FirestoreFieldReader.intValue(
+        map,
+        'sortOrder',
+        fallback: FirestoreFieldReader.intValue(map, 'orderIndex'),
+      ),
       createdAt: FirestoreFieldReader.dateTime(map, 'createdAt'),
     );
   }

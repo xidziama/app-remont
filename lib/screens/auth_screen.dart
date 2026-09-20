@@ -1,20 +1,21 @@
-import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
+import '../utils/auth_debug.dart';
 
-/// AuthScreen отвечает за первый экран приложения.
+/// AuthScreen — экран входа и регистрации по Email/Password.
 ///
-/// Важно для текущего dev-режима:
-/// - Phone Auth отключен в debug UI.
-/// - Разработчик входит одной кнопкой через anonymous Firebase Auth.
-/// - После входа main.dart получает новое состояние из authStateChanges
-///   и автоматически показывает ProjectListScreen.
+/// Экран не вызывает FirebaseAuth напрямую. Он только:
+/// - читает email и пароль из полей;
+/// - валидирует ввод на клиенте, чтобы дать быструю подсказку;
+/// - вызывает методы AuthService;
+/// - показывает ошибки через SnackBar.
 ///
-/// Почему экран все еще содержит production phone auth:
-/// - это полезная заготовка для будущего MVP production;
-/// - в debug она не используется;
-/// - при release-сборке можно включить настоящий телефонный вход.
+/// После успешного входа или регистрации здесь нет Navigator.push. Firebase
+/// обновит authStateChanges, а StreamBuilder в main.dart автоматически заменит
+/// AuthScreen на ProjectListScreen. Это проще и надежнее, чем ручная навигация
+/// из формы авторизации.
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
 
@@ -23,101 +24,182 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  /// Контроллер номера нужен только для release phone auth.
+  /// FormState нужен для запуска validator'ов всех полей одной командой.
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  /// Контроллер email хранит текст из поля ввода.
   ///
-  /// В debug-режиме поле не показывается, потому что пользователь попросил
-  /// отключить phone auth для разработки.
-  final _phoneController = TextEditingController(text: '+15555550100');
+  /// Контроллер нужен, потому что один и тот же email используется и для входа,
+  /// и для регистрации.
+  final TextEditingController _emailController = TextEditingController();
 
-  /// Контроллер SMS-кода тоже нужен только для release phone auth.
-  final _codeController = TextEditingController();
-
-  /// verificationId приходит от Firebase после отправки SMS.
+  /// Контроллер пароля хранит введенный пароль.
   ///
-  /// Если значение null — код еще не запрошен.
-  /// Если значение не null — можно показывать поле SMS-кода.
-  String? _verificationId;
+  /// Пароль не сохраняется в локальное состояние приложения и не пишется в
+  /// Firestore. Он передается только в Firebase Auth во время операции.
+  final TextEditingController _passwordController = TextEditingController();
 
-  /// Локальный флаг загрузки блокирует кнопки во время запросов к Firebase.
+  /// Loading блокирует кнопки и поля во время запроса к Firebase.
+  ///
+  /// Это защищает от двойных нажатий: например, пользователь не сможет дважды
+  /// отправить регистрацию и случайно получить странную ошибку.
   bool _loading = false;
+
+  /// Управляет видимостью пароля.
+  ///
+  /// По умолчанию пароль скрыт. Пользователь может открыть его через иконку,
+  /// чтобы проверить ввод на мобильной клавиатуре.
+  bool _obscurePassword = true;
+
+  /// Email без случайных пробелов по краям.
+  String get _email => _emailController.text.trim();
+
+  /// Пароль берем как есть, но обрезаем пробелы по краям.
+  ///
+  /// Для MVP это практично: случайный пробел после вставки пароля не ломает
+  /// вход. Если в будущем понадобится поддерживать пароли с пробелами по краям,
+  /// эту строку можно заменить на _passwordController.text.
+  String get _password => _passwordController.text.trim();
 
   @override
   void dispose() {
-    // Контроллеры нужно освобождать, чтобы Flutter не держал лишние ресурсы
+    // Контроллеры нужно освобождать вручную, чтобы Flutter не держал ресурсы
     // после закрытия экрана.
-    _phoneController.dispose();
-    _codeController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
-  /// Выполняет временный вход для разработки.
+  /// Проверяет email.
   ///
-  /// Здесь нет ручной навигации на список объектов. После signInAnonymously()
-  /// Firebase Auth обновит authStateChanges, а main.dart сам заменит экран.
-  Future<void> _signInAsTemporaryDevUser() async {
-    setState(() => _loading = true);
+  /// Это базовая клиентская проверка для UX. Финальную проверку все равно
+  /// выполняет Firebase Auth на сервере или в Auth Emulator.
+  String? _validateEmail(String? value) {
+    final email = value?.trim() ?? '';
 
-    try {
-      await AuthService.instance.signInAsTemporaryDevUser();
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      // SnackBar нужен, чтобы разработчик сразу увидел причину ошибки входа:
-      // например, если emulator не запущен или anonymous auth недоступен.
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка тестового входа: $error')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+    if (email.isEmpty) {
+      return 'Введите email.';
     }
+
+    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    if (!emailRegex.hasMatch(email)) {
+      return 'Введите корректный email.';
+    }
+
+    return null;
   }
 
-  /// Запрашивает SMS-код для production phone auth.
+  /// Проверяет пароль.
   ///
-  /// В debug этот метод не вызывается, потому что phone auth в dev отключен.
-  Future<void> _sendCode() async {
-    setState(() => _loading = true);
+  /// Firebase Email/Password требует минимум 6 символов. Держим такое же
+  /// правило в UI, чтобы пользователь видел ошибку до сетевого запроса.
+  String? _validatePassword(String? value) {
+    final password = value?.trim() ?? '';
 
-    await AuthService.instance.verifyPhoneNumber(
-      phoneNumber: _phoneController.text.trim(),
-      onCodeSent: (verificationId) {
-        // Firebase вернул verificationId — значит, можно показать поле SMS-кода.
-        setState(() {
-          _verificationId = verificationId;
-          _loading = false;
-        });
-      },
-      onFailed: (message) {
-        // Если Firebase вернул ошибку, выключаем loader и показываем сообщение.
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
-      },
-    );
+    if (password.isEmpty) {
+      return 'Введите пароль.';
+    }
+
+    if (password.length < 6) {
+      return 'Пароль должен быть не короче 6 символов.';
+    }
+
+    return null;
   }
 
-  /// Подтверждает SMS-код для production phone auth.
-  Future<void> _confirmCode() async {
-    final verificationId = _verificationId;
+  /// Показывает ошибку Firebase в дружелюбном виде.
+  ///
+  /// FirebaseAuthException.code стабилен и удобен для маппинга, а message может
+  /// быть слишком техническим или английским. Поэтому для частых ошибок даем
+  /// короткие русские сообщения, а для редких оставляем fallback.
+  void _showAuthError(FirebaseAuthException error) {
+    final message = switch (error.code) {
+      'invalid-email' => 'Email введен некорректно.',
+      'user-disabled' => 'Этот аккаунт отключен.',
+      'user-not-found' => 'Пользователь с таким email не найден.',
+      'wrong-password' => 'Неверный пароль.',
+      'invalid-credential' => 'Неверный email или пароль.',
+      'email-already-in-use' => 'Пользователь с таким email уже зарегистрирован.',
+      'weak-password' => 'Пароль слишком простой. Используйте минимум 6 символов.',
+      'network-request-failed' => 'Нет соединения с Firebase. Проверьте интернет или emulator.',
+      _ => error.message?.trim().isNotEmpty == true
+          ? error.message!.trim()
+          : 'Ошибка авторизации: ${error.code}',
+    };
 
-    // Без verificationId Firebase не сможет проверить SMS-код.
-    if (verificationId == null) {
+    _showMessage(message);
+  }
+
+  /// Показывает SnackBar.
+  ///
+  /// Через один метод все сообщения выглядят одинаково, а старый SnackBar
+  /// скрывается перед показом нового.
+  void _showMessage(String message) {
+    if (!mounted) {
       return;
     }
 
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(message),
+        ),
+      );
+  }
+
+  /// Запускает вход или регистрацию.
+  ///
+  /// Параметр action нужен, чтобы не дублировать одинаковые шаги:
+  /// - валидация формы;
+  /// - скрытие клавиатуры;
+  /// - включение loading;
+  /// - try/catch;
+  /// - выключение loading при ошибке.
+  Future<void> _submit(_AuthAction action) async {
+    if (_loading) {
+      return;
+    }
+
+    final form = _formKey.currentState;
+    if (form == null || !form.validate()) {
+      return;
+    }
+
+    // Скрываем клавиатуру перед сетевым запросом, чтобы пользователь видел
+    // loader и disabled state кнопок.
+    FocusScope.of(context).unfocus();
+
     setState(() => _loading = true);
 
     try {
-      await AuthService.instance.signInWithSmsCode(
-        verificationId: verificationId,
-        smsCode: _codeController.text.trim(),
+      switch (action) {
+        case _AuthAction.signIn:
+          await AuthService.instance.signInWithEmail(
+            email: _email,
+            password: _password,
+          );
+        case _AuthAction.register:
+          await AuthService.instance.registerWithEmail(
+            email: _email,
+            password: _password,
+          );
+      }
+
+      debugPrint(
+        '[AuthScreen._submit] ${action.name} completed. '
+        'currentUser=${AuthDebug.describeUser(AuthService.instance.currentUser)}',
       );
-    } finally {
+    } on FirebaseAuthException catch (error) {
+      _showAuthError(error);
+
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    } catch (error) {
+      _showMessage('Не удалось выполнить авторизацию: $error');
+
       if (mounted) {
         setState(() => _loading = false);
       }
@@ -126,137 +208,209 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // kDebugMode — главный переключатель текущего требования.
-    // В debug показываем временный вход и не показываем phone auth вообще.
-    if (kDebugMode) {
-      return _buildDevLogin(context);
-    }
+    final theme = Theme.of(context);
 
-    // В release показываем phone auth UI.
-    return _buildPhoneLogin(context);
-  }
-
-  /// UI временного dev-входа.
-  Widget _buildDevLogin(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'APP Remont',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
+        child: GestureDetector(
+          // Тап по свободному месту скрывает клавиатуру на телефоне.
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight - 40,
+                  ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 430),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Form(
+                            key: _formKey,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Icon(
+                                  Icons.lock_person_outlined,
+                                  size: 44,
+                                  color: theme.colorScheme.primary,
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Мои объекты',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.headlineMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Войдите или зарегистрируйтесь, чтобы управлять объектами ремонта.',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 28),
+                                _EmailField(
+                                  controller: _emailController,
+                                  enabled: !_loading,
+                                  validator: _validateEmail,
+                                  onSubmitted: (_) => _submit(_AuthAction.signIn),
+                                ),
+                                const SizedBox(height: 14),
+                                _PasswordField(
+                                  controller: _passwordController,
+                                  enabled: !_loading,
+                                  obscureText: _obscurePassword,
+                                  validator: _validatePassword,
+                                  onSubmitted: (_) => _submit(_AuthAction.signIn),
+                                  onToggleVisibility: () {
+                                    setState(() {
+                                      _obscurePassword = !_obscurePassword;
+                                    });
+                                  },
+                                ),
+                                const SizedBox(height: 22),
+                                FilledButton.icon(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => _submit(_AuthAction.signIn),
+                                  icon: _loading
+                                      ? const _ButtonLoader()
+                                      : const Icon(Icons.login),
+                                  label: const Text('Войти'),
+                                ),
+                                const SizedBox(height: 10),
+                                OutlinedButton.icon(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => _submit(_AuthAction.register),
+                                  icon: const Icon(Icons.person_add_alt_1),
+                                  label: const Text('Регистрация'),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Dev-режим: вход без телефона и SMS.',
-                    style: Theme.of(context).textTheme.bodyLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Нажмите кнопку ниже. Firebase Auth emulator создаст '
-                    'временного тестового пользователя, а приложение сразу '
-                    'откроет список объектов.',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 28),
-                  FilledButton.icon(
-                    onPressed: _loading ? null : _signInAsTemporaryDevUser,
-                    icon: _loading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.person),
-                    label: Text(
-                      _loading
-                          ? 'Вход...'
-                          : 'Войти как тестовый пользователь',
+                      ),
                     ),
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           ),
         ),
       ),
     );
   }
+}
 
-  /// UI production phone auth.
-  Widget _buildPhoneLogin(BuildContext context) {
-    final codeSent = _verificationId != null;
+/// Возможные действия формы.
+///
+/// enum делает код понятнее, чем bool вроде `isRegister`.
+enum _AuthAction {
+  signIn,
+  register,
+}
 
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'APP Remont',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Вход по номеру телефона.',
-                    style: Theme.of(context).textTheme.bodyLarge,
-                  ),
-                  const SizedBox(height: 28),
-                  TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Номер телефона',
-                    ),
-                  ),
-                  if (codeSent) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _codeController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'SMS-код',
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: _loading
-                        ? null
-                        : codeSent
-                            ? _confirmCode
-                            : _sendCode,
-                    child: _loading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Text(codeSent ? 'Войти' : 'Получить код'),
-                  ),
-                ],
-              ),
-            ),
+/// Поле email вынесено отдельно, чтобы основной build оставался коротким.
+class _EmailField extends StatelessWidget {
+  const _EmailField({
+    required this.controller,
+    required this.enabled,
+    required this.validator,
+    required this.onSubmitted,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final FormFieldValidator<String> validator;
+  final ValueChanged<String> onSubmitted;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: controller,
+      enabled: enabled,
+      keyboardType: TextInputType.emailAddress,
+      textInputAction: TextInputAction.next,
+      autofillHints: const [AutofillHints.email],
+      autocorrect: false,
+      textCapitalization: TextCapitalization.none,
+      validator: validator,
+      onFieldSubmitted: onSubmitted,
+      decoration: const InputDecoration(
+        labelText: 'Email',
+        hintText: 'name@example.com',
+        prefixIcon: Icon(Icons.email_outlined),
+      ),
+    );
+  }
+}
+
+/// Поле пароля с переключателем видимости.
+class _PasswordField extends StatelessWidget {
+  const _PasswordField({
+    required this.controller,
+    required this.enabled,
+    required this.obscureText,
+    required this.validator,
+    required this.onSubmitted,
+    required this.onToggleVisibility,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final bool obscureText;
+  final FormFieldValidator<String> validator;
+  final ValueChanged<String> onSubmitted;
+  final VoidCallback onToggleVisibility;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: controller,
+      enabled: enabled,
+      obscureText: obscureText,
+      keyboardType: TextInputType.visiblePassword,
+      textInputAction: TextInputAction.done,
+      autofillHints: const [AutofillHints.password],
+      autocorrect: false,
+      enableSuggestions: false,
+      validator: validator,
+      onFieldSubmitted: onSubmitted,
+      decoration: InputDecoration(
+        labelText: 'Password',
+        hintText: 'Минимум 6 символов',
+        prefixIcon: const Icon(Icons.lock_outline),
+        suffixIcon: IconButton(
+          tooltip: obscureText ? 'Показать пароль' : 'Скрыть пароль',
+          onPressed: enabled ? onToggleVisibility : null,
+          icon: Icon(
+            obscureText ? Icons.visibility_outlined : Icons.visibility_off_outlined,
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Маленький loader для кнопок.
+class _ButtonLoader extends StatelessWidget {
+  const _ButtonLoader();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 18,
+      height: 18,
+      child: CircularProgressIndicator(strokeWidth: 2),
     );
   }
 }

@@ -2,24 +2,167 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // Пользователь должен быть авторизован в Firebase Auth.
+    // -----------------------------------------------------------------------
+    // Common helpers
+    // -----------------------------------------------------------------------
+
     function signedIn() {
       return request.auth != null;
     }
 
-    // Файл объекта можно читать и писать только участникам этого объекта.
-    // Список участников хранится в Firestore-документе projects/{projectId}.
-    function isProjectMember(projectId) {
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function listHas(values, value) {
+      return values is list && value in values;
+    }
+
+    function validImageUpload() {
+      return request.resource != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    function projectExists(projectId) {
+      return firestore.exists(/databases/(default)/documents/projects/$(projectId));
+    }
+
+    function project(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)).data;
+    }
+
+    function memberExists(companyId) {
       return signedIn()
+        && firestore.exists(/databases/(default)/documents/companies/$(companyId)/members/$(uid()));
+    }
+
+    function member(companyId) {
+      return firestore.get(/databases/(default)/documents/companies/$(companyId)/members/$(uid())).data;
+    }
+
+    function isActiveCompanyMember(companyId) {
+      return memberExists(companyId)
+        && member(companyId).active == true
+        && member(companyId).role in ['owner', 'manager', 'worker', 'client'];
+    }
+
+    function isCompanyOwner(companyId) {
+      return isActiveCompanyMember(companyId) && member(companyId).role == 'owner';
+    }
+
+    function isCompanyManager(companyId) {
+      return isActiveCompanyMember(companyId) && member(companyId).role == 'manager';
+    }
+
+    function canReadProject(projectId) {
+      return projectExists(projectId)
+        && signedIn()
         && (
-          request.auth.uid in firestore.get(/databases/(default)/documents/projects/$(projectId)).data.participantIds
-          || request.auth.token.phone_number in firestore.get(/databases/(default)/documents/projects/$(projectId)).data.participantPhones
+          project(projectId).ownerId == uid()
+          || (hasCompanyId(projectId)
+              && isCompanyOwner(project(projectId).companyId))
+          || (hasCompanyId(projectId)
+              && isCompanyManager(project(projectId).companyId)
+              && listHas(project(projectId).managerIds, uid()))
+          || listHas(project(projectId).workerIds, uid())
+          || listHas(project(projectId).clientIds, uid())
+          || listHas(project(projectId).participantIds, uid())
         );
     }
 
-    // Все изображения проекта лежат внутри projects/{projectId}/...
-    match /projects/{projectId}/{allPaths=**} {
-      allow read, write: if isProjectMember(projectId);
+    function canManageProject(projectId) {
+      return projectExists(projectId)
+        && hasCompanyId(projectId)
+        && (
+          isCompanyOwner(project(projectId).companyId)
+          || (isCompanyManager(project(projectId).companyId)
+            && listHas(project(projectId).managerIds, uid()))
+        );
+    }
+
+    function isProjectWorker(projectId) {
+      return projectExists(projectId)
+        && listHas(project(projectId).workerIds, uid());
+    }
+
+    // Returns true only when the project document exists and its companyId
+    // field is a non-empty string. Mirrors hasProjectCompanyId() in
+    // firestore.rules and guards isCompanyOwner/isCompanyManager calls so
+    // that a project without a companyId field (legacy data) never produces
+    // a null path segment inside the member lookup.
+    function hasCompanyId(projectId) {
+      return projectExists(projectId)
+        && project(projectId).get('companyId', '') is string
+        && project(projectId).get('companyId', '').size() > 0;
+    }
+
+    function assignedStageWorker(projectId, stageId) {
+      return signedIn()
+        && firestore.exists(
+          /databases/(default)/documents/projects/$(projectId)/stages/$(stageId)
+        )
+        && listHas(
+          firestore.get(
+            /databases/(default)/documents/projects/$(projectId)/stages/$(stageId)
+          ).data.assignedUserIds,
+          uid()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Production stage photos and receipt photos.
+    //
+    // Firestore metadata lives at:
+    // projects/{projectId}/stages/{stageId}/photos/{photoId}
+    //
+    // Storage bytes live at:
+    // projects/{projectId}/stages/{stageId}/photos/{photoId}.jpg
+    // -----------------------------------------------------------------------
+    match /projects/{projectId}/stages/{stageId}/photos/{fileName} {
+      allow read: if canReadProject(projectId);
+
+      allow create, update: if validImageUpload()
+        && (
+          canManageProject(projectId)
+          || assignedStageWorker(projectId, stageId)
+        );
+
+      allow delete: if canManageProject(projectId);
+    }
+
+    // -----------------------------------------------------------------------
+    // Project chat images.
+    //
+    // Storage path:
+    // projects/{projectId}/chat/{messageId}.jpg
+    // -----------------------------------------------------------------------
+    match /projects/{projectId}/chat/{fileName} {
+      allow read: if canReadProject(projectId);
+      allow create, update: if validImageUpload() && canReadProject(projectId);
+      allow delete: if canManageProject(projectId);
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy project-level photo/receipt folders used by older MVP screens.
+    //
+    // Examples:
+    // projects/{projectId}/photos/{uuid}.jpg
+    // projects/{projectId}/receipts/{uuid}.jpg
+    // -----------------------------------------------------------------------
+    match /projects/{projectId}/{folder}/{fileName} {
+      allow read: if canReadProject(projectId);
+
+      allow create, update: if validImageUpload()
+        && folder in ['photos', 'receipts']
+        && (canManageProject(projectId) || isProjectWorker(projectId));
+
+      allow delete: if canManageProject(projectId);
+    }
+
+    // Deny every other Storage path by default.
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }

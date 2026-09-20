@@ -1,6 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Firebase Auth, Firestore, Storage, and local emulators need network access. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Camera is used by image_picker when the user takes a new stage photo. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 13+ gallery access for images. image_picker can also use the
+         system photo picker, but declaring this keeps older device flows clear. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Android 12 and lower gallery access. maxSdkVersion avoids requesting
+         the deprecated storage permission on Android 13+. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
-        android:label="app_remont"
+        android:label="Мои объекты"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

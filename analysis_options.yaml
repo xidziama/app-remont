@@ -1,5 +1,20 @@
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Build artifacts are recreated by Flutter/Gradle and must never be
+    # analyzed as project source.
+    - build/**
+    - .dart_tool/**
+
+    # Common generated Dart files. The project currently has very little
+    # generated code, but these exclusions protect analyzer from generated
+    # artifacts when Firebase/Flutter tools recreate them.
+    - '**/*.g.dart'
+    - '**/*.freezed.dart'
+    - '**/generated/**'
+    - lib/firebase_options.dart
+
 linter:
   rules:
     prefer_single_quotes: true

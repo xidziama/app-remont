@@ -1,4 +1,4 @@
-package com.example.app_remont
+package com.remont.app
 
 import io.flutter.embedding.android.FlutterActivity
 

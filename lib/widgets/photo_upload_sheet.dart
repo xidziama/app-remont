@@ -1,12 +1,13 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../models/photo.dart';
 import '../models/project.dart';
-import '../models/project_photo.dart';
 import '../models/repair_stage.dart';
 import '../repositories/project_repository.dart';
 import '../services/storage_service.dart';
@@ -108,6 +109,19 @@ class _PhotoUploadSheetState extends State<PhotoUploadSheet> {
     }
   }
 
+  /// Reads image dimensions for lightweight metadata.
+  Future<({int width, int height})> _readImageSize(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    final size = (width: image.width, height: image.height);
+
+    image.dispose();
+    codec.dispose();
+
+    return size;
+  }
+
   Future<void> _save() async {
     final image = _image;
     final bytes = _previewBytes;
@@ -128,23 +142,38 @@ class _PhotoUploadSheetState extends State<PhotoUploadSheet> {
 
     try {
       final repository = context.read<ProjectRepository>();
-
-      final imageUrl = await StorageService.instance.uploadProjectImage(
+      final photoId = repository.createStagePhotoId(
         projectId: widget.project.id,
-        folder: 'photos/$stageId',
-        bytes: bytes,
+        stageId: stageId,
       );
 
-      await repository.addPhoto(
-        widget.project.id,
-        ProjectPhoto(
-          id: '',
-          objectId: widget.project.id,
+      final upload = await StorageService.instance.uploadStagePhoto(
+        projectId: widget.project.id,
+        stageId: stageId,
+        photoId: photoId,
+        bytes: bytes,
+        contentType: image.mimeType ?? 'image/jpeg',
+      );
+      final size = await _readImageSize(bytes);
+
+      await repository.addStagePhoto(
+        Photo(
+          id: photoId,
+          projectId: widget.project.id,
           stageId: stageId,
-          imageUrl: imageUrl,
-          description: _descriptionController.text.trim(),
+          type: PhotoType.progress,
+          downloadUrl: upload.downloadUrl,
+          storagePath: upload.storagePath,
+          comment: _descriptionController.text.trim().isEmpty
+              ? null
+              : _descriptionController.text.trim(),
+          amount: null,
           uploadedBy: repository.currentAuthorName,
-          uploadedAt: _selectedDate,
+          createdAt: _selectedDate,
+          width: size.width,
+          height: size.height,
+          sizeBytes: upload.sizeBytes,
+          isFavorite: false,
         ),
       );
 
@@ -229,7 +258,7 @@ class _PhotoUploadSheetState extends State<PhotoUploadSheet> {
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
-                      value: _selectedStageId,
+                      initialValue: _selectedStageId,
                       decoration: const InputDecoration(
                         labelText: 'Этап работ',
                         prefixIcon: Icon(Icons.flag),

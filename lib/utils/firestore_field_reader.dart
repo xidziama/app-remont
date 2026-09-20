@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// FirestoreFieldReader — маленький набор безопасных функций чтения полей.
 ///
 /// Зачем он нужен:
-/// - Firestore хранит данные как Map<String, dynamic>.
+/// - Firestore хранит данные как `Map<String, dynamic>`.
 /// - Старые документы, ручные записи из Emulator UI или ошибки миграций могут
 ///   оставить поле null, строкой вместо числа или вообще без нужного ключа.
 /// - Небезопасный cast вроде `data['members'] as List` ломает приложение,
@@ -57,6 +57,25 @@ class FirestoreFieldReader {
     }
 
     return value.whereType<String>().toList();
+  }
+
+  /// Безопасно читает boolean.
+  ///
+  /// Firestore обычно возвращает bool, но в dev-данных поле может отсутствовать
+  /// или быть создано вручную как строка. В таком случае возвращаем fallback,
+  /// чтобы один некорректный документ не ломал весь экран.
+  static bool boolValue(
+    Map<String, dynamic> data,
+    String key, {
+    bool fallback = false,
+  }) {
+    final value = data[key];
+
+    if (value is bool) {
+      return value;
+    }
+
+    return fallback;
   }
 
   /// Безопасно читает число как double.

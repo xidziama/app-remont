@@ -5,64 +5,126 @@ import 'status_chip.dart';
 
 /// Карточка объекта в списке.
 ///
-/// Виджет получает готовую модель Project и callback на нажатие.
-/// Так список объектов остается простым, а UI карточки переиспользуемым.
+/// Виджет получает готовую модель Project. Progress bar строится из summary
+/// полей проекта, поэтому карточка не читает stages сама и остается легкой.
 class ProjectCard extends StatelessWidget {
   const ProjectCard({
     super.key,
     required this.project,
     required this.onTap,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onSelectionChanged,
   });
 
-  /// Данные объекта ремонта.
   final Project project;
-
-  /// Действие при нажатии. Обычно открывает ProjectDetailScreen.
   final VoidCallback onTap;
+
+  /// Когда true, карточка работает как элемент выбора для массового удаления.
+  final bool selectionMode;
+  final bool selected;
+  final ValueChanged<bool>? onSelectionChanged;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final progressPercent = project.progressPercent.clamp(0, 100);
+
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
+        onTap:
+            selectionMode ? () => onSelectionChanged?.call(!selected) : onTap,
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Верхняя строка: название объекта слева, статус справа.
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Text(
-                      project.title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  StatusChip(status: project.status),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Адрес всегда показываем, потому что это ключевая информация.
-              Text(project.address),
-              if (project.description.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                // Описание обрезается, чтобы длинный текст не ломал список.
-                Text(
-                  project.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.black54,
-                      ),
+              if (selectionMode) ...[
+                Checkbox(
+                  value: selected,
+                  onChanged: (value) {
+                    onSelectionChanged?.call(value ?? false);
+                  },
                 ),
+                const SizedBox(width: 4),
               ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            project.title,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        StatusChip(status: project.status),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(project.address),
+                    if (project.managersLabel.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        project.managersLabel,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                    if (project.description.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        project.description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.black54,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(99),
+                            child: LinearProgressIndicator(
+                              minHeight: 8,
+                              value: project.progressValue,
+                              backgroundColor:
+                                  theme.colorScheme.surfaceContainerHighest,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          '$progressPercent%',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Завершено этапов: '
+                      '${project.completedStages} из ${project.totalStages}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),

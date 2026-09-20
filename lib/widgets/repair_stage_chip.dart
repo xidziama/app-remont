@@ -31,8 +31,8 @@ class RepairStageChip extends StatelessWidget {
 
     return ActionChip(
       onPressed: onTap,
-      backgroundColor: selected ? color : color.withOpacity(0.10),
-      side: BorderSide(color: color.withOpacity(0.35)),
+      backgroundColor: selected ? color : color.withAlpha(26),
+      side: BorderSide(color: color.withAlpha(89)),
       avatar: Icon(
         StageUiUtils.iconFromName(stage.icon),
         color: foreground,

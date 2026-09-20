@@ -1,11 +1,17 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/company.dart';
 import '../models/project.dart';
 import '../repositories/project_repository.dart';
+import '../services/auth_service.dart';
+import '../utils/auth_debug.dart';
 
 class CreateProjectScreen extends StatefulWidget {
-  const CreateProjectScreen({super.key});
+  const CreateProjectScreen({super.key, required this.company});
+
+  final CompanyMember company;
 
   @override
   State<CreateProjectScreen> createState() => _CreateProjectScreenState();
@@ -16,41 +22,80 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   final _titleController = TextEditingController();
   final _addressController = TextEditingController();
   final _descriptionController = TextEditingController();
-  ProjectStatus _status = ProjectStatus.active;
+
+  ProjectStatus _status = ProjectStatus.inProgress;
   bool _saving = false;
 
   @override
   void dispose() {
-    // Каждый TextEditingController держит ресурсы ввода.
-    // dispose() освобождает их, когда экран закрывается.
+    // Controllers hold native text-input resources. They must be disposed when
+    // the screen is removed from the widget tree.
     _titleController.dispose();
     _addressController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
 
+  /// Creates a safe diagnostic string for the current Firebase user.
+  ///
+  /// We log UID, email, and isAnonymous because these fields are enough to
+  /// understand whether Email Auth succeeded. We never log passwords or tokens.
+  String _describeUserForDebug() {
+    return AuthDebug.describeUser(AuthService.instance.currentUser);
+  }
+
+  /// Converts technical errors into a short message that is clear for the user.
+  ///
+  /// The repository throws UserNotAuthenticatedException before any Firestore
+  /// write if FirebaseAuth.currentUser is null. Firestore itself can also return
+  /// `unauthenticated`, so we map both cases to the same clean text.
+  String _saveErrorMessage(Object error) {
+    if (error is UserNotAuthenticatedException) {
+      return error.message;
+    }
+
+    if (error is FirebaseException && error.code == 'unauthenticated') {
+      return 'Пользователь не авторизован.';
+    }
+
+    return 'Не удалось создать объект: $error';
+  }
+
   Future<void> _save() async {
-    // Валидатор формы проверяет обязательные поля перед сохранением.
+    // The form validator catches empty required fields before any network call.
     if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    final currentUser = AuthService.instance.currentUser;
+    debugPrint(
+      '[CreateProjectScreen._save] currentUser=${_describeUserForDebug()}',
+    );
+
+    // If Auth has no current user, we stop here and do not attempt a Firestore
+    // write. This avoids cloud_firestore/unauthenticated and gives the user a
+    // direct explanation.
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Пользователь не авторизован.')),
+      );
       return;
     }
 
     setState(() => _saving = true);
 
     try {
-      // Репозиторий создает документ проекта и участника-владельца в Firestore.
-      // Экран передает только данные формы, а путь коллекции `objects`
-      // остается внутри ProjectRepository.
       await context.read<ProjectRepository>().createProject(
-        title: _titleController.text.trim(),
-        address: _addressController.text.trim(),
-        description: _descriptionController.text.trim(),
-        status: _status,
-      );
+            title: _titleController.text.trim(),
+            address: _addressController.text.trim(),
+            description: _descriptionController.text.trim(),
+            status: _status,
+            company: widget.company,
+          );
 
       if (mounted) {
-        // После успешного сохранения закрываем форму.
-        // ProjectListScreen обновится сам, потому что слушает Firestore stream.
+        // ProjectListScreen listens to Firestore, so after a successful write we
+        // only close the form. The list updates from the stream automatically.
         Navigator.of(context).pop();
       }
     } catch (error) {
@@ -58,10 +103,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         return;
       }
 
-      // Показываем ошибку сохранения прямо на экране.
-      // Частые причины: не запущен Firebase emulator или не прошли rules.
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не удалось создать объект: $error')),
+        SnackBar(content: Text(_saveErrorMessage(error))),
       );
     } finally {
       if (mounted) {
@@ -75,18 +118,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Новый объект')),
       body: Form(
-        // Form связывает поля и валидаторы.
-        // Через _formKey мы запускаем проверку всех полей в _save().
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             TextFormField(
               controller: _titleController,
-              decoration: const InputDecoration(
-                labelText: 'Название',
-              ),
-              // Название обязательно: без него объект в списке будет непонятным.
+              decoration: const InputDecoration(labelText: 'Название'),
               validator: (value) => value == null || value.trim().isEmpty
                   ? 'Введите название'
                   : null,
@@ -94,11 +132,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _addressController,
-              decoration: const InputDecoration(
-                labelText: 'Адрес',
-              ),
-              // Адрес обязателен, потому что ремонтный объект обычно привязан
-              // к конкретной квартире, дому или помещению.
+              decoration: const InputDecoration(labelText: 'Адрес'),
               validator: (value) => value == null || value.trim().isEmpty
                   ? 'Введите адрес'
                   : null,
@@ -108,17 +142,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               controller: _descriptionController,
               minLines: 3,
               maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: 'Описание',
-              ),
+              decoration: const InputDecoration(labelText: 'Описание'),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<ProjectStatus>(
-              value: _status,
-              decoration: const InputDecoration(
-                labelText: 'Статус',
-              ),
-              items: ProjectStatus.values
+              initialValue: _status,
+              decoration: const InputDecoration(labelText: 'Статус'),
+              items: const [
+                ProjectStatus.inProgress,
+                ProjectStatus.paused,
+              ]
                   .map(
                     (status) => DropdownMenuItem(
                       value: status,
@@ -126,14 +159,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                     ),
                   )
                   .toList(),
-              onChanged: (value) {
-                // Dropdown может вернуть null, если значение сброшено.
-                // В нашем UI null не нужен, поэтому обновляем статус только
-                // когда пришло реальное значение.
-                if (value != null) {
-                  setState(() => _status = value);
-                }
-              },
+              onChanged: _saving
+                  ? null
+                  : (value) {
+                      if (value != null) {
+                        setState(() => _status = value);
+                      }
+                    },
             ),
             const SizedBox(height: 20),
             FilledButton(

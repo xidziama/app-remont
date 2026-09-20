@@ -1,0 +1,12 @@
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon.png"
+  min_sdk_android: 21
+
+  # Адаптивная иконка Android (API 26+).
+  # Фон — точный hex цвет фона самого icon.png, поэтому даже если
+  # лаунчер обрежет края foreground-слоя, цвет будет совпадать и
+  # стыка видно не будет.
+  adaptive_icon_background: "#02224F"
+  adaptive_icon_foreground: "assets/icon.png"

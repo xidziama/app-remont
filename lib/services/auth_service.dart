@@ -1,113 +1,198 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
-/// AuthService — тонкая обертка над Firebase Auth.
+import '../utils/auth_debug.dart';
+
+/// AuthService — тонкая обертка над Firebase Authentication.
 ///
-/// Сервис знает только о Firebase API. Бизнес-логика экранов остается в UI,
-/// а работа с авторизацией собрана в одном месте.
+/// Важная идея архитектуры:
+/// - экран авторизации отвечает только за форму, loading state и SnackBar;
+/// - сервис отвечает за реальные Firebase вызовы;
+/// - main.dart слушает authStateChanges и сам переключает AuthScreen на
+///   ProjectListScreen после успешного входа.
+///
+/// Благодаря этому UI не знает, как именно Firebase создает пользователя или
+/// проверяет пароль. Если позже появятся Google/Apple auth или восстановление
+/// пароля, их можно будет добавить здесь, не размазывая Firebase API по экранам.
 class AuthService {
   AuthService._();
 
-  /// Singleton удобен для маленького MVP: сервис без состояния и используется
-  /// из разных экранов. При росте проекта его можно заменить DI-контейнером.
+  /// Singleton подходит для текущего MVP: сервис не хранит сложное состояние,
+  /// а только делегирует операции Firebase SDK.
   static final AuthService instance = AuthService._();
 
+  /// Основной клиент Firebase Auth.
+  ///
+  /// Он уже настроен в main.dart после Firebase.initializeApp().
+  /// Если включены эмуляторы, FirebaseBootstrap переключит этот же instance на
+  /// локальный Auth Emulator до первого запроса авторизации.
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  ConfirmationResult? _webConfirmationResult;
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  /// Поток сообщает об изменениях авторизации: вход, выход, восстановление сессии.
-  Stream<User?> get authStateChanges => _auth.authStateChanges();
+  /// Поток состояния авторизации.
+  ///
+  /// StreamBuilder в main.dart использует этот поток как единственный источник
+  /// правды:
+  /// - User == null: показываем AuthScreen;
+  /// - User != null: показываем ProjectListScreen.
+  Stream<User?> get authStateChanges {
+    return _auth.authStateChanges().map((user) {
+      if (user == null) {
+        debugPrint('[AuthService.authStateChanges] SIGNED OUT');
+      } else {
+        debugPrint(
+          '[AuthService.authStateChanges] SIGNED IN uid=${user.uid}, '
+          'email=${user.email ?? ''}, isAnonymous=${user.isAnonymous}, '
+          'providerData=${AuthDebug.describeProviderData(user)}',
+        );
+      }
 
-  /// Текущий пользователь Firebase. Может быть null, если пользователь не вошел.
+      return user;
+    });
+  }
+
+  /// Текущий Firebase-пользователь.
+  ///
+  /// Может быть null, если пользователь еще не вошел или уже вышел.
   User? get currentUser => _auth.currentUser;
 
-  /// Временный тестовый вход для dev-режима.
+  /// Выполняет вход по email и паролю.
   ///
-  /// Почему используется anonymous auth:
-  /// 1. Не нужен номер телефона.
-  /// 2. Не нужен SMS-код.
-  /// 3. Не нужно включать Phone provider в Firebase Console.
-  /// 4. Firebase Auth emulator поддерживает anonymous users сразу.
+  /// UI передает уже обрезанные строки. Firebase сам проверит существование
+  /// пользователя, корректность пароля, блокировки и прочие серверные правила.
+  /// Ошибки FirebaseAuthException не скрываем: экран поймает их и покажет
+  /// понятное сообщение пользователю.
+  Future<void> signInWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    debugPrint('[AuthService.signInWithEmail] Start email=$email');
+
+    final credential = await _auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    AuthDebug.logUser(
+      'AuthService.signInWithEmail credential.user',
+      credential.user,
+    );
+    AuthDebug.logUser(
+      'AuthService.signInWithEmail currentUser',
+      _auth.currentUser,
+    );
+
+    await _ensureUserProfile(credential.user);
+  }
+
+  /// Регистрирует нового пользователя по email и паролю.
   ///
-  /// Важно:
-  /// - этот метод предназначен только для разработки;
-  /// - production-вход позже можно вернуть на phone auth;
-  /// - после успешного входа `authStateChanges` в main.dart автоматически
-  ///   переключит AuthScreen на ProjectListScreen.
-  Future<void> signInAsTemporaryDevUser() async {
-    // kDebugMode равен true при обычном запуске через `flutter run`.
-    // В release-сборке временный вход блокируется, чтобы случайно не оставить
-    // тестовую авторизацию в production-приложении.
-    if (!kDebugMode) {
-      throw FirebaseAuthException(
-        code: 'dev-login-disabled',
-        message: 'Тестовый вход доступен только в debug-режиме.',
+  /// После успешной регистрации Firebase автоматически считает пользователя
+  /// авторизованным. Поэтому отдельный вход после createUserWithEmailAndPassword
+  /// не нужен: authStateChanges сам переведет приложение на ProjectListScreen.
+  Future<void> registerWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    debugPrint('[AuthService.registerWithEmail] Start email=$email');
+
+    final credential = await _auth.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    AuthDebug.logUser(
+      'AuthService.registerWithEmail credential.user',
+      credential.user,
+    );
+    AuthDebug.logUser(
+      'AuthService.registerWithEmail currentUser',
+      _auth.currentUser,
+    );
+
+    await _ensureUserProfile(credential.user);
+
+    if (credential.user != null && !credential.user!.emailVerified) {
+      debugPrint(
+        '[AuthService.registerWithEmail] Sending email verification to '
+        '${credential.user!.email}.',
       );
+      await credential.user!.sendEmailVerification();
     }
-
-    // Если пользователь уже вошел, повторный вход не нужен.
-    // Это защищает от лишнего создания anonymous users в emulator.
-    if (_auth.currentUser != null) {
-      return;
-    }
-
-    // Firebase создаст временного anonymous user и вернет его UID.
-    // Этот UID дальше используется как ownerId и participantId в Firestore.
-    await _auth.signInAnonymously();
   }
 
-  /// Запускает отправку SMS-кода.
+  /// Текущий (закэшированный SDK) статус подтверждения почты.
   ///
-  /// На iOS/Android используется verifyPhoneNumber.
-  /// На web Firebase использует другой API — signInWithPhoneNumber.
-  Future<void> verifyPhoneNumber({
-    required String phoneNumber,
-    required void Function(String verificationId) onCodeSent,
-    required void Function(String message) onFailed,
-  }) async {
-    // Firebase Auth для web возвращает ConfirmationResult, а не verificationId.
-    if (kIsWeb) {
-      try {
-        _webConfirmationResult = await _auth.signInWithPhoneNumber(phoneNumber);
-        onCodeSent('web');
-      } on FirebaseAuthException catch (error) {
-        onFailed(error.message ?? error.code);
-      }
-      return;
+  /// Это значение могло устареть, если пользователь подтвердил почту по
+  /// ссылке из письма в этой же сессии. Для свежего статуса используйте
+  /// [reloadAndCheckEmailVerified].
+  bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
+
+  /// Повторно отправляет письмо подтверждения текущему пользователю.
+  ///
+  /// На Firebase Auth Emulator письмо не уходит на реальный почтовый ящик.
+  /// Чтобы подтвердить почту в dev-режиме, откройте Emulator UI
+  /// (http://127.0.0.1:4000/auth, либо http://10.0.2.2:4000/auth с телефона
+  /// на Android emulator), найдите пользователя и либо откройте ссылку
+  /// подтверждения из карточки письма, либо переключите "Email verified"
+  /// вручную в интерфейсе эмулятора.
+  Future<void> sendEmailVerification() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception('Пользователь не авторизован.');
     }
 
-    // Мобильный сценарий: Firebase отправляет SMS и возвращает verificationId.
-    await _auth.verifyPhoneNumber(
-      phoneNumber: phoneNumber,
-      verificationCompleted: (credential) async {
-        // Android иногда умеет автоматически прочитать SMS и сразу войти.
-        await _auth.signInWithCredential(credential);
-      },
-      verificationFailed: (error) => onFailed(error.message ?? error.code),
-      codeSent: (verificationId, _) => onCodeSent(verificationId),
-      codeAutoRetrievalTimeout: (_) {},
-    );
+    await user.sendEmailVerification();
   }
 
-  /// Подтверждает SMS-код и выполняет вход.
-  Future<void> signInWithSmsCode({
-    required String verificationId,
-    required String smsCode,
-  }) async {
-    // На web подтверждаем код через сохраненный ConfirmationResult.
-    if (kIsWeb && _webConfirmationResult != null) {
-      await _webConfirmationResult!.confirm(smsCode);
+  /// Перезагружает данные пользователя с сервера и возвращает свежий
+  /// emailVerified.
+  ///
+  /// `User.emailVerified` — закэшированное поле, которое не обновляется
+  /// автоматически после перехода по ссылке из письма. reload() запрашивает
+  /// актуальные данные у Firebase Auth.
+  Future<bool> reloadAndCheckEmailVerified() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      return false;
+    }
+
+    await user.reload();
+    return _auth.currentUser?.emailVerified ?? false;
+  }
+
+  Future<void> _ensureUserProfile(User? user) async {
+    if (user == null) {
       return;
     }
 
-    // На мобильных платформах собираем credential из verificationId и SMS-кода.
-    final credential = PhoneAuthProvider.credential(
-      verificationId: verificationId,
-      smsCode: smsCode,
+    final now = DateTime.now();
+    final email = user.email?.trim().toLowerCase() ?? '';
+    final userPath = 'users/${user.uid}';
+    debugPrint('[ACCESS] Ensuring user profile...');
+    debugPrint('[ACCESS] Writing $userPath email=$email');
+
+    await _db.collection('users').doc(user.uid).set(
+      {
+        'uid': user.uid,
+        'email': email,
+        'displayName': user.displayName ?? email,
+        'baseRole': 'user',
+        'updatedAt': now.toIso8601String(),
+        'createdAt': now.toIso8601String(),
+      },
+      SetOptions(merge: true),
     );
-    await _auth.signInWithCredential(credential);
   }
 
   /// Завершает текущую Firebase-сессию.
-  Future<void> signOut() => _auth.signOut();
+  ///
+  /// После signOut поток authStateChanges вернет null, и main.dart автоматически
+  /// покажет AuthScreen.
+  Future<void> signOut() async {
+    AuthDebug.logUser('AuthService.signOut before', _auth.currentUser);
+    await _auth.signOut();
+    AuthDebug.logUser('AuthService.signOut after', _auth.currentUser);
+  }
 }
