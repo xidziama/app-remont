@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/expense.dart';
 import '../models/photo.dart';
 import '../repositories/project_repository.dart';
+import '../widgets/storage_image.dart';
 
 class StagePhotoPreviewScreen extends StatelessWidget {
   const StagePhotoPreviewScreen({
@@ -116,13 +116,13 @@ class StagePhotoPreviewScreen extends StatelessWidget {
               minScale: 1,
               maxScale: 4,
               child: Center(
-                child: CachedNetworkImage(
-                  imageUrl: photo.downloadUrl,
+                child: StorageImage(
+                  storagePath: photo.storagePath,
                   fit: BoxFit.contain,
-                  placeholder: (context, _) => const Center(
+                  placeholder: (context) => const Center(
                     child: CircularProgressIndicator(),
                   ),
-                  errorWidget: (context, _, __) => const Center(
+                  errorWidget: (context) => const Center(
                     child: Icon(
                       Icons.broken_image_outlined,
                       color: Colors.white,

@@ -1,6 +1,5 @@
 import 'dart:typed_data';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -15,6 +14,7 @@ import '../repositories/project_repository.dart';
 import '../services/storage_service.dart';
 import '../utils/auth_debug.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/storage_image.dart';
 import 'fullscreen_image_preview_screen.dart';
 
 class ExpensesScreen extends StatefulWidget {
@@ -256,15 +256,15 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   void _openReceiptPreview(Expense expense) {
-    final receiptUrl = expense.receiptUrl;
-    if (receiptUrl == null || receiptUrl.isEmpty) {
+    final storagePath = expense.receiptStoragePath;
+    if (storagePath == null || storagePath.isEmpty) {
       return;
     }
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FullscreenImagePreviewScreen(
-          imageUrl: receiptUrl,
+          storagePath: storagePath,
           title: 'Чек',
           details: [
             NumberFormat.currency(locale: 'ru_RU', symbol: '₽')
@@ -622,7 +622,7 @@ class _ExpenseTile extends StatelessWidget {
       child: ListTile(
         onTap: selectionMode
             ? () => onSelectionChanged(!selected)
-            : (expense.receiptUrl == null ? null : onOpen),
+            : (expense.receiptStoragePath == null ? null : onOpen),
         leading: selectionMode
             ? Checkbox(
                 value: selected,
@@ -630,7 +630,7 @@ class _ExpenseTile extends StatelessWidget {
                     ? null
                     : (value) => onSelectionChanged(value ?? false),
               )
-            : _ReceiptThumbnail(url: expense.receiptUrl),
+            : _ReceiptThumbnail(storagePath: expense.receiptStoragePath),
         title: Text(expense.category.label),
         subtitle: Text(
           [
@@ -683,30 +683,25 @@ class _ExpenseTile extends StatelessWidget {
 }
 
 class _ReceiptThumbnail extends StatelessWidget {
-  const _ReceiptThumbnail({required this.url});
+  const _ReceiptThumbnail({required this.storagePath});
 
-  final String? url;
+  final String? storagePath;
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = url;
-    if (imageUrl == null || imageUrl.isEmpty) {
+    final path = storagePath;
+    if (path == null || path.isEmpty) {
       return const Icon(Icons.receipt);
     }
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
-      child: CachedNetworkImage(
-        imageUrl: imageUrl,
+      child: StorageImage(
+        storagePath: path,
         width: 48,
         height: 48,
         fit: BoxFit.cover,
-        placeholder: (context, _) => const SizedBox(
-          width: 48,
-          height: 48,
-          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-        ),
-        errorWidget: (context, _, __) => const SizedBox(
+        errorWidget: (context) => const SizedBox(
           width: 48,
           height: 48,
           child: Icon(Icons.broken_image_outlined),
@@ -817,9 +812,9 @@ class _ExpenseFormState extends State<_ExpenseForm> {
 
     try {
       final expenseId = repository.createExpenseId(widget.project.id);
-      final upload = await StorageService.instance.uploadProjectImageDetailed(
+      final upload = await StorageService.instance.uploadProjectReceipt(
         projectId: widget.project.id,
-        folder: 'receipts',
+        id: expenseId,
         bytes: await receipt.readAsBytes(),
         contentType: receipt.mimeType ?? 'image/jpeg',
       );
@@ -840,7 +835,6 @@ class _ExpenseFormState extends State<_ExpenseForm> {
           comment: _commentController.text.trim().isEmpty
               ? null
               : _commentController.text.trim(),
-          receiptUrl: upload.downloadUrl,
           receiptStoragePath: upload.storagePath,
         ),
       );

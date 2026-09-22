@@ -1,9 +1,9 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/expense.dart';
 import '../models/photo.dart';
+import 'storage_image.dart';
 
 /// Grid card for a stage photo or receipt.
 ///
@@ -51,18 +51,10 @@ class StagePhotoCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  CachedNetworkImage(
-                    imageUrl: photo.downloadUrl,
+                  StorageImage(
+                    storagePath: photo.storagePath,
                     fit: BoxFit.cover,
                     memCacheWidth: 700,
-                    fadeInDuration: const Duration(milliseconds: 180),
-                    placeholder: (context, _) => const Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    errorWidget: (context, _, __) => const ColoredBox(
-                      color: Color(0xFFE5E7EB),
-                      child: Center(child: Icon(Icons.broken_image_outlined)),
-                    ),
                   ),
                   Positioned(
                     left: 8,

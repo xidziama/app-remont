@@ -1,0 +1,10 @@
+{
+  "name": "remont-backfill-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Разовые административные скрипты миграции данных. Не деплоятся, запускаются вручную.",
+  "dependencies": {
+    "firebase-admin": "^13.0.2"
+  }
+}

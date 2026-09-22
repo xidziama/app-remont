@@ -164,6 +164,7 @@ class _StagePhotoUploadSheetState extends State<StagePhotoUploadSheet> {
         photoId: photoId,
         bytes: bytes,
         contentType: image.mimeType ?? 'image/jpeg',
+        kind: _isReceipt ? 'receipt' : 'photo',
       );
       if (_isReceipt) {
         await repository.addExpense(
@@ -182,7 +183,6 @@ class _StagePhotoUploadSheetState extends State<StagePhotoUploadSheet> {
             comment: _commentController.text.trim().isEmpty
                 ? null
                 : _commentController.text.trim(),
-            receiptUrl: upload.downloadUrl,
             receiptStoragePath: upload.storagePath,
           ),
         );
@@ -195,7 +195,6 @@ class _StagePhotoUploadSheetState extends State<StagePhotoUploadSheet> {
             projectId: widget.stage.projectId,
             stageId: widget.stage.id,
             type: _type,
-            downloadUrl: upload.downloadUrl,
             storagePath: upload.storagePath,
             comment: _commentController.text.trim().isEmpty
                 ? null

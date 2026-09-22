@@ -1,5 +1,6 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+
+import '../widgets/storage_image.dart';
 
 /// Reusable fullscreen image preview.
 ///
@@ -9,12 +10,12 @@ import 'package:flutter/material.dart';
 class FullscreenImagePreviewScreen extends StatelessWidget {
   const FullscreenImagePreviewScreen({
     super.key,
-    required this.imageUrl,
+    required this.storagePath,
     required this.title,
     this.details = const [],
   });
 
-  final String imageUrl;
+  final String storagePath;
   final String title;
   final List<String> details;
 
@@ -39,13 +40,13 @@ class FullscreenImagePreviewScreen extends StatelessWidget {
               minScale: 1,
               maxScale: 4,
               child: Center(
-                child: CachedNetworkImage(
-                  imageUrl: imageUrl,
+                child: StorageImage(
+                  storagePath: storagePath,
                   fit: BoxFit.contain,
-                  placeholder: (context, _) => const Center(
+                  placeholder: (context) => const Center(
                     child: CircularProgressIndicator(),
                   ),
-                  errorWidget: (context, _, __) => const Center(
+                  errorWidget: (context) => const Center(
                     child: Icon(
                       Icons.broken_image_outlined,
                       color: Colors.white,

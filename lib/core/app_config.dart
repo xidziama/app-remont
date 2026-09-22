@@ -60,42 +60,22 @@ class AppConfig {
   static const authPort = 9099;
 
   // ---------------------------------------------------------------------
-  // Yandex Object Storage (S3-совместимое хранилище фото).
+  // Photos backend (Yandex Cloud Function + API Gateway).
   //
-  // Firestore и Auth остаются на Firebase, но изображения (фото этапов,
-  // чеки, фото в чате) хранятся в Yandex Object Storage. Подробности и
-  // ограничения безопасности — в storage_service.dart.
+  // Фото (этапы, чеки, чат) хранятся в Yandex Object Storage, но клиент
+  // больше не подписывает S3-запросы сам — он просит presigned URL у этого
+  // backend, который проверяет права по логике firestore.rules и подписывает
+  // запрос ключом, лежащим только на сервере. Подробности — в
+  // storage_service.dart и photos_api_client.dart.
   // ---------------------------------------------------------------------
 
-  /// Имя бакета. Несекретный параметр, поэтому есть безопасный default.
-  static const s3Bucket = String.fromEnvironment(
-    'S3_BUCKET',
-    defaultValue: 'app-remont-photos',
-  );
-
-  /// Endpoint Yandex Object Storage. Несекретный параметр.
-  static const s3Endpoint = String.fromEnvironment(
-    'S3_ENDPOINT',
-    defaultValue: 'storage.yandexcloud.net',
-  );
-
-  /// Регион бакета. Несекретный параметр.
-  static const s3Region = String.fromEnvironment(
-    'S3_REGION',
-    defaultValue: 'ru-central1',
-  );
-
-  /// Access Key ID. Секрет — default пустой, значение передается только через
-  /// --dart-define и не должно попадать в git.
-  static const s3AccessKey = String.fromEnvironment(
-    'S3_ACCESS_KEY',
-    defaultValue: '',
-  );
-
-  /// Secret Access Key. Секрет — default пустой, значение передается только
-  /// через --dart-define и не должно попадать в git.
-  static const s3SecretKey = String.fromEnvironment(
-    'S3_SECRET_KEY',
-    defaultValue: '',
+  /// Адрес API Gateway перед функцией photos-api. Несекретный параметр
+  /// (публичный URL шлюза), поэтому у него есть безопасный default —
+  /// override через --dart-define нужен только для указания на другое
+  /// окружение (например локальный мок при разработке).
+  static const storageApiBaseUrl = String.fromEnvironment(
+    'STORAGE_API_URL',
+    defaultValue:
+        'https://d5d2eui4bbj2imlstjaq.bu9mdbe1.apigw.yandexcloud.net',
   );
 }

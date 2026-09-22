@@ -1,10 +1,10 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/photo.dart';
 import '../models/repair_stage.dart';
 import '../utils/stage_ui_utils.dart';
+import 'storage_image.dart';
 
 /// Карточка фотографии объекта.
 ///
@@ -41,18 +41,10 @@ class ProjectPhotoCard extends StatelessWidget {
         children: [
           AspectRatio(
             aspectRatio: 4 / 3,
-            child: CachedNetworkImage(
-              imageUrl: photo.downloadUrl,
+            child: StorageImage(
+              storagePath: photo.storagePath,
               fit: BoxFit.cover,
               memCacheWidth: 900,
-              fadeInDuration: const Duration(milliseconds: 180),
-              placeholder: (context, _) => const Center(
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              errorWidget: (context, _, __) => const ColoredBox(
-                color: Color(0xFFE5E7EB),
-                child: Center(child: Icon(Icons.broken_image_outlined)),
-              ),
             ),
           ),
           Padding(

@@ -2889,7 +2889,10 @@ class ProjectRepository {
     for (final photoDoc in photosSnapshot.docs) {
       try {
         final photo = Photo.fromMap(photoDoc.id, photoDoc.data());
-        await StorageService.instance.deleteByPath(photo.storagePath);
+        await StorageService.instance.deleteByPath(
+          photo.storagePath,
+          kind: photo.isReceipt ? 'receipt' : 'photo',
+        );
       } catch (error) {
         throw Exception(
           'Не удалось удалить файл Storage для ${photoDoc.reference.path}: '
@@ -3339,7 +3342,10 @@ class ProjectRepository {
       stageUpdates['photosCount'] = FieldValue.increment(1);
       final coverPhotoUrl = stage?.coverPhotoUrl;
       if (coverPhotoUrl == null || coverPhotoUrl.isEmpty) {
-        stageUpdates['coverPhotoUrl'] = photo.downloadUrl;
+        // D6/D7: coverPhotoUrl хранит storagePath, а не presigned-ссылку —
+        // это поле сейчас нигде не отображается в UI, но должно оставаться
+        // самосогласованным (сравнение ниже, в deleteStagePhoto).
+        stageUpdates['coverPhotoUrl'] = photo.storagePath;
       }
     }
 
@@ -3399,7 +3405,10 @@ class ProjectRepository {
   /// Storage-файл удаляет вызывающий UI через StorageService. Разделение нужно,
   /// чтобы пользовательский сценарий не падал полностью, если файл уже удален.
   Future<void> deleteStagePhoto(Photo photo) async {
-    await StorageService.instance.deleteByPath(photo.storagePath);
+    await StorageService.instance.deleteByPath(
+      photo.storagePath,
+      kind: photo.isReceipt ? 'receipt' : 'photo',
+    );
 
     final stageRef = _stagesCollection(photo.projectId).doc(photo.stageId);
     final stageSnapshot = await stageRef.get();
@@ -3423,7 +3432,7 @@ class ProjectRepository {
     } else {
       updates['photosCount'] = FieldValue.increment(-1);
 
-      if (stage?.coverPhotoUrl == photo.downloadUrl) {
+      if (stage?.coverPhotoUrl == photo.storagePath) {
         final replacementCover = await _findReplacementCoverPhotoUrl(photo);
         updates['coverPhotoUrl'] = replacementCover;
       }
@@ -3444,6 +3453,8 @@ class ProjectRepository {
     await batch.commit();
   }
 
+  /// Возвращает storagePath (не presigned-ссылку, см. D6/D7) кандидата на
+  /// новую обложку этапа.
   Future<String?> _findReplacementCoverPhotoUrl(Photo deletedPhoto) async {
     final snapshot = await _stagePhotosCollection(
       projectId: deletedPhoto.projectId,
@@ -3460,7 +3471,7 @@ class ProjectRepository {
       return null;
     }
 
-    return candidates.first.downloadUrl;
+    return candidates.first.storagePath;
   }
 
   /// Следит за timeline проекта.
@@ -3603,7 +3614,6 @@ class ProjectRepository {
   Future<void> sendImageMessage({
     required String projectId,
     required String messageId,
-    required String downloadUrl,
     required String storagePath,
     String text = '',
   }) async {
@@ -3626,7 +3636,6 @@ class ProjectRepository {
       text: text.trim(),
       type: ChatMessageType.image,
       createdAt: DateTime.now(),
-      imageUrl: downloadUrl,
       storagePath: storagePath,
     );
 
@@ -3871,19 +3880,27 @@ class ProjectRepository {
   /// stage.receiptsCount/receiptsTotal не разъехались с реальным списком
   /// чеков, если что-то прервётся на середине.
   ///
-  /// Порядок намеренно такой: сначала Firestore batch, потом файл в S3.
-  /// Firestore — источник истины для UI и для сумм, поэтому с точки зрения
-  /// пользователя чек должен исчезнуть и суммы пересчитаться независимо от
-  /// того, доступен ли сейчас S3 (сеть, неверно настроенные credentials —
-  /// см. StorageService._assertCredentialsConfigured). Если файл удалить не
-  /// удалось после успешного batch, это осиротевший файл в бакете — не
-  /// блокер, только запись в лог для последующей ручной уборки. Если бы
-  /// порядок был обратным (как раньше) и S3-часть падала, весь метод
-  /// прерывался ДО Firestore batch, и чек оставался в списке — притом что
-  /// Firestore в этот момент был полностью доступен и готов к записи.
+  /// Порядок: сначала файл в S3 (через backend), потом Firestore batch.
+  /// Раньше (когда S3 подписывался прямо на клиенте) порядок был обратным —
+  /// это защищало от локально неверно настроенных S3-credentials. Теперь
+  /// подпись и авторизация удаления файла идут через backend photos-api,
+  /// который для чека БЕЗ прав canManageProject проверяет авторство именно
+  /// по документу expenses/{id} (совпадение uid с createdBy) — то есть этот
+  /// документ должен ещё существовать в момент запроса на удаление файла.
+  /// Если удалить сначала Firestore, а потом файл, backend для
+  /// автора-подрядчика (не owner/manager) больше не найдёт документ и
+  /// откажет 403 — то есть свой же неоплаченный чек стало бы невозможно
+  /// удалить целиком. Поэтому файл удаляется первым: если backend отказал
+  /// (сеть, права, чек внезапно оказался оплачен) — Firestore не трогаем
+  /// вообще, ничего не остаётся в рассинхроне.
   Future<void> deleteExpense(Expense expense) async {
     if (expense.isPaid) {
       throw StateError('Оплаченный чек нельзя удалить.');
+    }
+
+    final storagePath = expense.receiptStoragePath;
+    if (storagePath != null && storagePath.isNotEmpty) {
+      await StorageService.instance.deleteByPath(storagePath, kind: 'receipt');
     }
 
     final expenseRef = _objectsCollection
@@ -3913,20 +3930,10 @@ class ProjectRepository {
     try {
       await batch.commit();
     } catch (error) {
-      throw Exception('Не удалось удалить чек ${expense.id}: $error');
-    }
-
-    final storagePath = expense.receiptStoragePath;
-    if (storagePath != null && storagePath.isNotEmpty) {
-      try {
-        await StorageService.instance.deleteByPath(storagePath);
-      } catch (error) {
-        debugPrint(
-          '[deleteExpense] Запись чека ${expense.id} удалена из Firestore, '
-          'но файл S3 "$storagePath" удалить не удалось: $error. Файл '
-          'осиротел в бакете — требуется отдельная уборка.',
-        );
-      }
+      throw Exception(
+        'Файл чека удалён, но не удалось удалить запись ${expense.id} из '
+        'Firestore: $error',
+      );
     }
   }
 

@@ -30,8 +30,10 @@ enum ChatMessageType {
 /// `projects/{projectId}/messages/{messageId}`.
 ///
 /// Image bytes are never stored in Firestore. Firestore stores only the
-/// download URL and the Storage path, while the real file lives in Firebase
-/// Storage at `projects/{projectId}/chat/{messageId}.jpg`.
+/// storage path (`storagePath`) — the download URL is no longer persisted
+/// (see StorageImage/PhotoUrlResolver), a fresh one is requested on display.
+/// The real file lives in Yandex Object Storage at
+/// `projects/{projectId}/chat/{messageId}.jpg`.
 class ChatMessage {
   const ChatMessage({
     required this.id,
@@ -62,10 +64,13 @@ class ChatMessage {
   /// Creation date used for chat ordering.
   final DateTime createdAt;
 
-  /// Download URL for image messages.
+  /// Устаревшее поле: presigned-ссылка на момент отправки. Больше не
+  /// используется для показа (см. StorageImage) — новые сообщения пишут
+  /// сюда `null`. Оставлено для чтения старых записей.
   final String? imageUrl;
 
-  /// Direct Storage path for future cleanup/deletion.
+  /// Ключ файла в Yandex Object Storage — по нему запрашивается свежая
+  /// ссылка на показ и делается удаление.
   final String? storagePath;
 
   bool get isImage => type == ChatMessageType.image;

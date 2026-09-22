@@ -32,8 +32,11 @@ enum ExpenseCategory {
 
 /// Full expense/receipt model.
 ///
-/// Receipt images live in Firebase Storage. Firestore stores only metadata,
-/// the download URL and direct Storage path.
+/// Receipt images live in Yandex Object Storage. Firestore stores only
+/// metadata and `receiptStoragePath` — `receiptUrl` is a legacy field kept
+/// for reading old documents, new writes leave it `null` (see
+/// StorageImage/PhotoUrlResolver: the download link is requested fresh on
+/// display instead of being persisted).
 class Expense {
   const Expense({
     required this.id,

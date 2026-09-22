@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,6 +10,7 @@ import '../models/project.dart';
 import '../repositories/project_repository.dart';
 import '../services/storage_service.dart';
 import '../utils/auth_debug.dart';
+import '../widgets/storage_image.dart';
 import 'fullscreen_image_preview_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -121,7 +121,6 @@ class _ChatScreenState extends State<ChatScreen> {
       await repository.sendImageMessage(
         projectId: widget.project.id,
         messageId: messageId,
-        downloadUrl: upload.downloadUrl,
         storagePath: upload.storagePath,
         text: caption,
       );
@@ -137,15 +136,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _openImagePreview(ChatMessage message) {
-    final imageUrl = message.imageUrl;
-    if (imageUrl == null || imageUrl.isEmpty) {
+    final storagePath = message.storagePath;
+    if (storagePath == null || storagePath.isEmpty) {
       return;
     }
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FullscreenImagePreviewScreen(
-          imageUrl: imageUrl,
+          storagePath: storagePath,
           title: 'Фото',
           details: [
             if (message.text.trim().isNotEmpty) message.text.trim(),
@@ -393,7 +392,7 @@ class _ChatMessageCard extends StatelessWidget {
             const SizedBox(height: 6),
             if (message.isImage) ...[
               _ChatImagePreview(
-                imageUrl: message.imageUrl,
+                storagePath: message.storagePath,
                 onTap: onImageTap,
               ),
               if (message.text.trim().isNotEmpty) ...[
@@ -416,17 +415,17 @@ class _ChatMessageCard extends StatelessWidget {
 
 class _ChatImagePreview extends StatelessWidget {
   const _ChatImagePreview({
-    required this.imageUrl,
+    required this.storagePath,
     required this.onTap,
   });
 
-  final String? imageUrl;
+  final String? storagePath;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final url = imageUrl;
-    if (url == null || url.isEmpty) {
+    final path = storagePath;
+    if (path == null || path.isEmpty) {
       return const AspectRatio(
         aspectRatio: 4 / 3,
         child: ColoredBox(
@@ -443,17 +442,10 @@ class _ChatImagePreview extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: AspectRatio(
           aspectRatio: 4 / 3,
-          child: CachedNetworkImage(
-            imageUrl: url,
+          child: StorageImage(
+            storagePath: path,
             fit: BoxFit.cover,
             memCacheWidth: 700,
-            placeholder: (context, _) => const Center(
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            errorWidget: (context, _, __) => const ColoredBox(
-              color: Color(0xFFE5E7EB),
-              child: Center(child: Icon(Icons.broken_image_outlined)),
-            ),
           ),
         ),
       ),

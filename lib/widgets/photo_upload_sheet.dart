@@ -162,7 +162,6 @@ class _PhotoUploadSheetState extends State<PhotoUploadSheet> {
           projectId: widget.project.id,
           stageId: stageId,
           type: PhotoType.progress,
-          downloadUrl: upload.downloadUrl,
           storagePath: upload.storagePath,
           comment: _descriptionController.text.trim().isEmpty
               ? null

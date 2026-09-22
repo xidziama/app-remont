@@ -51,7 +51,7 @@ class Photo {
     required this.projectId,
     required this.stageId,
     required this.type,
-    required this.downloadUrl,
+    this.downloadUrl,
     required this.storagePath,
     required this.comment,
     required this.amount,
@@ -73,7 +73,13 @@ class Photo {
   final String projectId;
   final String stageId;
   final PhotoType type;
-  final String downloadUrl;
+
+  /// Устаревшее поле: presigned-ссылка на момент загрузки. Больше НЕ
+  /// используется для показа (см. StorageImage/PhotoUrlResolver) — новые
+  /// записи пишут сюда `null`. Оставлено для чтения (не записи) старых
+  /// документов, у которых ещё не заполнен storagePath, до прогона
+  /// backend/scripts/backfill-storage-paths.mjs.
+  final String? downloadUrl;
   final String storagePath;
   final String? comment;
   final double? amount;
@@ -125,7 +131,7 @@ class Photo {
       type: PhotoType.fromFirestore(
         FirestoreFieldReader.string(map, 'type', fallback: 'progress'),
       ),
-      downloadUrl: FirestoreFieldReader.string(map, 'downloadUrl'),
+      downloadUrl: FirestoreFieldReader.nullableString(map, 'downloadUrl'),
       storagePath: FirestoreFieldReader.string(map, 'storagePath'),
       comment: FirestoreFieldReader.nullableString(map, 'comment'),
       amount: map['amount'] == null

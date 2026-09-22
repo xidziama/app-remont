@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../utils/auth_debug.dart';
+import 'photo_url_resolver.dart';
 
 /// AuthService — тонкая обертка над Firebase Authentication.
 ///
@@ -193,6 +194,10 @@ class AuthService {
   Future<void> signOut() async {
     AuthDebug.logUser('AuthService.signOut before', _auth.currentUser);
     await _auth.signOut();
+    // Presigned-ссылки в кэше резолвера не тянут за собой чужие данные (они
+    // просто перестанут работать без валидного токена), но на общем
+    // устройстве не должны переживать смену пользователя.
+    PhotoUrlResolver.instance.clearCache();
     AuthDebug.logUser('AuthService.signOut after', _auth.currentUser);
   }
 }
